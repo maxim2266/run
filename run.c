@@ -263,20 +263,10 @@ void run(char** const cmd)
 	int sig;
 
 	while(sigwait(&sig_set, &sig) == 0) {
-		switch(sig) {
-			case SIGCHLD:
-				scan_children(pid);
-				break;
-
-			case SIGPWR:
-				log_info("received signal %s (%d), forwarding as SIGTERM", sig2str(sig), sig);
-				forward_signal(pid, SIGTERM);
-				break;
-
-			default:
-				forward_signal(pid, sig);
-				break;
-		}
+		if(sig == SIGCHLD)
+			scan_children(pid);
+		else
+			forward_signal(pid, sig);
 	}
 
 	die_errno("signal wait failed");
