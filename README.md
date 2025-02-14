@@ -22,10 +22,10 @@ Options:
 ```
 
 ### Rationale
-The key point of `run` is waiting for _all_ running processes, not just for the main one, so
+The key point of `run` is waiting for **all** running processes, not just for the main one, so
 that the `run` process is always the first to start and the last to terminate. This is how it
 looks in practice:
-```
+```sh
 ▶ ./run sh -c 'sleep 5 &'
 run: [info] started process `sh` (pid 4499)
 run: [info] pid 4499: completed
@@ -39,7 +39,7 @@ run: [info] exit code 0
 For some reason, most of the existing implementations have chosen not to wait for all processes
 to complete, for example here we have a stray child `sleep 5` still running after the `init`
 process is gone:
-```
+```sh
 ▶ tini -svv -- sh -c 'sleep 5 &'
 [INFO  tini (4518)] Spawned child process 'sh' with pid '4519'
 [DEBUG tini (4518)] Received SIGCHLD
@@ -52,8 +52,11 @@ process is gone:
    4521    3903    4521 ps -o pid,ppid,pgid,args
 ```
 IMO this simply undermines the whole idea of `init` process, because in a container environment
-abandoned children will get no process to be reparented to, and will be killed. With `run`
-one can launch a number of services in one simple command (like `sh -c 'service1 & service2 & service3 &'`),
+abandoned children will get no process to be reparented to, and will be killed. Using `run`
+a number of services can be launched with one simple command, for example 
+```sh
+sh -c 'service1 & service2 & service3 &'
+```
 and then have them all controlled by the `run` process until they all terminate.  Other `init`s
 would require the launching script to also wait for all its children, a pointless re-implementation
 of the `init` functionality.
@@ -75,4 +78,4 @@ Environment variables:
   DOCKER      docker command (default: "docker")
   IMAGE_NAME  name of the docker image (default: "run-local:latest")
 ```
-Also, see `Dockerfile`.
+Also, see [Dockerfile](Dockerfile).
