@@ -25,7 +25,7 @@ Options:
 The key point of `run` is waiting for **all** running processes, not just for the main one, so
 that the `run` process is always the first to start and the last to terminate. This is how it
 looks in practice:
-```sh
+```
 ▶ ./run sh -c 'sleep 5 &'
 run: [info] started process `sh` (pid 4499)
 run: [info] pid 4499: completed
@@ -39,7 +39,7 @@ run: [info] exit code 0
 For some reason, most of the existing implementations have chosen not to wait for all processes
 to complete, for example here we have a stray child `sleep 5` still running after the `init`
 process is gone:
-```sh
+```
 ▶ tini -svv -- sh -c 'sleep 5 &'
 [INFO  tini (4518)] Spawned child process 'sh' with pid '4519'
 [DEBUG tini (4518)] Received SIGCHLD
@@ -53,8 +53,8 @@ process is gone:
 ```
 IMO this simply undermines the whole idea of `init` process, because in a container environment
 abandoned children will get no process to be reparented to, and will be killed. Using `run`
-a number of services can be launched with one simple command, for example 
-```sh
+a number of services can be launched with one simple command, for example
+```
 sh -c 'service1 & service2 & service3 &'
 ```
 and then have them all controlled by the `run` process until they all terminate.  Other `init`s
