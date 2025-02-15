@@ -1,5 +1,5 @@
 FROM    alpine:latest AS builder
-RUN     apk add --no-cache build-base musl-dev git
+RUN     apk add --no-cache gcc make musl-dev git
 WORKDIR /build
 COPY    . .
 RUN     [ "make", "clean", "static" ]
