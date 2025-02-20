@@ -116,7 +116,8 @@ pid_t next_proc(int* const status) //-> pid, or -1 when no children left, or 0 w
 
 // exit code for this process
 static
-int exit_code = EXIT_SUCCESS;
+int exit_code = EXIT_SUCCESS,
+	got_tty = 0;
 
 static
 void on_cmd_exit(const int code)
@@ -125,13 +126,13 @@ void on_cmd_exit(const int code)
 		exit_code = code;
 
 	// get TTY back
-	if(tcsetpgrp(STDIN_FILENO, getpgid(0)) != 0 && errno != ENOTTY)
+	if(got_tty && tcsetpgrp(STDIN_FILENO, getpgid(0)) != 0)
 		log_warn_errno("failed to get back TTY");
 }
 
 // process grouping
 static
-unsigned use_group = 0u;
+int use_group = 0;
 
 // scan all children and handle their status changes
 static
@@ -174,6 +175,8 @@ void scan_children(const pid_t cmd_pid)
 static
 pid_t spawn(char** const cmd, sigset_t* const sig_set)
 {
+	got_tty = isatty(STDIN_FILENO);
+
 	const pid_t pid = fork();
 
 	if(pid < 0)
@@ -187,13 +190,14 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set)
 	}
 
 	// child process
+
 	// new process group
 	if(setpgid(0, 0) != 0)
 		die_errno("failed to set process group for `%s`", cmd[0]);
 
 	// TTY for the new process group
-	if(tcsetpgrp(STDIN_FILENO, getpgid(0)) != 0 && errno != ENOTTY)
-		die_errno("failed to acquire TTY");
+	if(got_tty && tcsetpgrp(STDIN_FILENO, getpgid(0)) != 0)
+		die_errno("failed to acquire TTY for `%s`", cmd[0]);
 
 	// restore signals
 	signal(SIGTTIN, SIG_DFL);
@@ -332,7 +336,7 @@ int main(int argc, char** argv)
 				break;
 
 			case 'g':
-				use_group = 1u;
+				use_group = 1;
 				break;
 
 			case '!':
