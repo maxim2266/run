@@ -63,7 +63,7 @@ then
 
 	"$DOCKER" build -f - -t "$IMAGE_NAME" . <<-EOF
 		FROM    alpine:latest
-		RUN     apk add --no-cache gcc make musl-dev git
+		RUN     [ "apk", "add", "--no-cache", "gcc", "make", "musl-dev", "git" ]
 		WORKDIR /build
 		COPY    . .
 		RUN     [ "make", "clean", "static" ]
