@@ -8,7 +8,6 @@
 #include <signal.h>
 #include <errno.h>
 #include <unistd.h>
-#include <spawn.h>
 #include <sys/prctl.h>
 #include <err.h>
 
@@ -120,10 +119,14 @@ static
 int exit_code = EXIT_SUCCESS;
 
 static
-void set_exit_code(const int code)
+void on_cmd_exit(const int code)
 {
 	if(exit_code == EXIT_SUCCESS)
 		exit_code = code;
+
+	// get TTY back
+	if(tcsetpgrp(STDIN_FILENO, getpgid(0)) != 0 && errno != ENOTTY)
+		log_warn_errno("failed to get back TTY");
 }
 
 // process grouping
@@ -132,7 +135,7 @@ unsigned use_group = 0u;
 
 // scan all children and handle their status changes
 static
-void scan_children(const pid_t main_pid)
+void scan_children(const pid_t cmd_pid)
 {
 	pid_t pid;
 	int status;
@@ -144,19 +147,19 @@ void scan_children(const pid_t main_pid)
 
 			if(code == EXIT_SUCCESS)
 				log_info("pid %jd: completed", (intmax_t)pid);
-			else {
-				if(pid == main_pid)
-					set_exit_code(code);
-
+			else
 				log_warn("pid %jd: failed with code %d", (intmax_t)pid, code);
-			}
+
+			if(pid == cmd_pid)
+				on_cmd_exit(code);
+
 		} else if(WIFSIGNALED(status)) {
 			const int sig = WTERMSIG(status);
 
-			if(pid == main_pid)
-				set_exit_code(128 + sig);
-
 			log_warn("pid %jd: killed by %s (%d)", (intmax_t)pid, sig2str(sig), sig);
+
+			if(pid == cmd_pid)
+				on_cmd_exit(128 + sig);
 		}
 	}
 
@@ -169,53 +172,53 @@ void scan_children(const pid_t main_pid)
 
 // spawn a new process
 static
-pid_t spawn(char** const cmd)
+pid_t spawn(char** const cmd, sigset_t* const sig_set)
 {
-	// attributes for posix_spawn
-	const short attr_flags = POSIX_SPAWN_SETSIGMASK
-						   | POSIX_SPAWN_SETSIGDEF
-						   | (use_group ? POSIX_SPAWN_SETPGROUP : 0);
+	const pid_t pid = fork();
 
-	posix_spawnattr_t attr;
-	sigset_t sig_set;
+	if(pid < 0)
+		die_errno("failed to start process `%s`", cmd[0]);
 
-	sigemptyset(&sig_set);
+	if(pid > 0) {	// parent process
+		log_info("started process `%s` (pid %jd)", cmd[0], (intmax_t)pid);
+		fclose(stdout);
 
-	// initialise attributes and reset signal mask
-	if(posix_spawnattr_init(&attr) != 0
-	|| posix_spawnattr_setflags(&attr, attr_flags) != 0
-	|| posix_spawnattr_setsigmask(&attr, &sig_set) != 0)
-		die_errno("cannot set attributes for `posix_spawn`");
+		return pid;
+	}
 
-	// set all signal handlers to default
-	sigfillset(&sig_set);
+	// child process
+	// new process group
+	if(setpgid(0, 0) != 0)
+		die_errno("failed to set process group for `%s`", cmd[0]);
 
-	if(posix_spawnattr_setsigdefault(&attr, &sig_set) != 0)
-		die_errno("cannot set signal handler attributes for `posix_spawn`");
+	// TTY for the new process group
+	if(tcsetpgrp(STDIN_FILENO, getpgid(0)) != 0 && errno != ENOTTY)
+		die_errno("failed to acquire TTY");
 
-	// put the child in its own process group, if required
-	if(use_group && posix_spawnattr_setpgroup(&attr, 0) != 0)
-		die_errno("cannot set group attribute for `posix_spawn`");
+	// restore signals
+	signal(SIGTTIN, SIG_DFL);
+	signal(SIGTTOU, SIG_DFL);
 
-	// start the process
-	extern char **environ;
-	pid_t pid;
+	// restore signal mask
+	sigprocmask(SIG_SETMASK, sig_set, NULL);
 
-	while(posix_spawnp(&pid, cmd[0], NULL, &attr, &cmd[0], environ) != 0)
-		if(errno != EINTR)
-			die_errno("failed to start process `%s`", cmd[0]);
+	// exec the command
+	execvp(cmd[0], cmd);
 
-	log_info("started process `%s` (pid %jd)", cmd[0], (intmax_t)pid);
+	// `exec` failed
+	const int err = errno;
 
-	// cleanup
-	posix_spawnattr_destroy(&attr);
+	log_err_errno("failed to start `%s`", cmd[0]);
 
-	// close unneeded handles (without replacement, as /dev/null is assumed unavailable)
-	fclose(stdin);
-	fclose(stdout);
-
-	// all done
-	return pid;
+	// exit code, see https://tldp.org/LDP/abs/html/exitcodes.html#EXITCODESREF
+	switch(err) {
+		case EACCES:
+			_exit(126);
+		case ENOENT:
+			_exit(127);
+		default:
+			_exit(EXIT_FAILURE);
+	}
 }
 
 // signal forwarding
@@ -241,7 +244,7 @@ void run(char** const cmd)
 		die_errno("cannot become a subreaper");
 
 	// signals we want to handle
-	sigset_t sig_set;
+	sigset_t sig_set, old_set;
 
 	sigemptyset(&sig_set);
 
@@ -254,10 +257,14 @@ void run(char** const cmd)
 	sigaddset(&sig_set, SIGUSR2);
 	sigaddset(&sig_set, SIGPWR);
 
-	sigprocmask(SIG_SETMASK, &sig_set, NULL);
+	sigprocmask(SIG_SETMASK, &sig_set, &old_set);
+
+	// ignore signals
+	signal(SIGTTIN, SIG_IGN);
+	signal(SIGTTOU, SIG_IGN);
 
 	// start the process
-	const pid_t pid = spawn(cmd);
+	const pid_t pid = spawn(cmd, &old_set);
 
 	// wait on signals
 	int sig;
