@@ -114,29 +114,41 @@ pid_t next_proc(int* const status) //-> pid, or -1 when no children left, or 0 w
 	return pid;
 }
 
-// exit code for this process
+// state variables
 static
-int exit_code = EXIT_SUCCESS,
-	got_tty = 0;
+int cmd_exit_code = EXIT_SUCCESS,
+	is_interactive = 0,
+	use_group = 0;
 
 static
-void on_cmd_exit(const int code)
+pid_t cmd_pid = 0;
+
+// send a signal; returns errno
+static
+int send_signal(const int sig)
 {
-	if(exit_code == EXIT_SUCCESS)
-		exit_code = code;
-
-	// get TTY back
-	if(got_tty && tcsetpgrp(STDIN_FILENO, getpgid(0)) != 0)
-		log_warn_errno("failed to get back TTY");
+	return kill(use_group ? -cmd_pid : cmd_pid, sig) ? errno : 0;
 }
 
-// process grouping
+// initialisation
 static
-int use_group = 0;
+void init(void)
+{
+	if((is_interactive = isatty(STDIN_FILENO)) != 0)
+		die("not designed to run in interactive mode");	// just for now
+}
+
+static
+void on_proc_exit(const pid_t pid, const int code)
+{
+	// exit code from the main command
+	if(pid == cmd_pid && cmd_exit_code == EXIT_SUCCESS)
+		cmd_exit_code = code;
+}
 
 // scan all children and handle their status changes
 static
-void scan_children(const pid_t cmd_pid)
+void scan_children(void)
 {
 	pid_t pid;
 	int status;
@@ -151,57 +163,30 @@ void scan_children(const pid_t cmd_pid)
 			else
 				log_warn("pid %jd: failed with code %d", (intmax_t)pid, code);
 
-			if(pid == cmd_pid)
-				on_cmd_exit(code);
+			on_proc_exit(pid, code);
 
 		} else if(WIFSIGNALED(status)) {
 			const int sig = WTERMSIG(status);
 
 			log_warn("pid %jd: killed by %s (%d)", (intmax_t)pid, sig2str(sig), sig);
-
-			if(pid == cmd_pid)
-				on_cmd_exit(128 + sig);
+			on_proc_exit(pid, 128 + sig);
 		}
 	}
 
 	// terminate when no more children left
 	if(pid == -1) {
-		log_info("exit code %d", exit_code);
-		exit(exit_code);
+		log_info("exit code %d", cmd_exit_code);
+		exit(cmd_exit_code);
 	}
 }
 
-// spawn a new process
-static
-pid_t spawn(char** const cmd, sigset_t* const sig_set)
+// exec the given command
+static __attribute__((noinline,noreturn))
+void do_exec(char** const cmd, sigset_t* const sig_set)
 {
-	got_tty = isatty(STDIN_FILENO);
-
-	const pid_t pid = fork();
-
-	if(pid < 0)
-		die_errno("failed to start process `%s`", cmd[0]);
-
-	if(pid > 0) {	// parent process
-		log_info("started process `%s` (pid %jd)", cmd[0], (intmax_t)pid);
-		fclose(stdout);
-
-		return pid;
-	}
-
-	// child process
-
-	// new process group
-	if(setpgid(0, 0) != 0)
-		die_errno("failed to set process group for `%s`", cmd[0]);
-
-	// TTY for the new process group
-	if(got_tty && tcsetpgrp(STDIN_FILENO, getpgid(0)) != 0)
-		die_errno("failed to acquire TTY for `%s`", cmd[0]);
-
-	// restore signals
-	signal(SIGTTIN, SIG_DFL);
-	signal(SIGTTOU, SIG_DFL);
+	// create new process group, if required
+	if(use_group)
+		setpgid(0, 0);
 
 	// restore signal mask
 	sigprocmask(SIG_SETMASK, sig_set, NULL);
@@ -212,7 +197,8 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set)
 	// `exec` failed
 	const int err = errno;
 
-	log_err_errno("failed to start `%s`", cmd[0]);
+	log_err_errno("failed to exec `%s`", cmd[0]);
+	fflush(NULL);
 
 	// exit code, see https://tldp.org/LDP/abs/html/exitcodes.html#EXITCODESREF
 	switch(err) {
@@ -225,22 +211,49 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set)
 	}
 }
 
+// spawn a new process
+static
+pid_t spawn(char** const cmd, sigset_t* const sig_set)
+{
+	const pid_t pid = fork();
+
+	if(pid < 0)
+		die_errno("failed to start process `%s`", cmd[0]);
+
+	if(pid > 0) {
+		// parent process
+		if(use_group)
+			setpgid(pid, pid);
+
+		log_info("forked process `%s` (pid %jd)", cmd[0], (intmax_t)pid);
+		fclose(stdout);
+
+		if(!is_interactive)
+			fclose(stdin);
+
+		return pid;
+	}
+
+	// child process
+	do_exec(cmd, sig_set);
+}
+
 // signal forwarding
 static
-void forward_signal(const pid_t pid, const int sig)
+void forward_signal(const int sig)
 {
 	const char* const entity = use_group ? "group" : "process";
 
-	if(kill(use_group ? -pid : pid, sig) == 0)
+	if(send_signal(sig) == 0)
 		log_info("signal %s (%d) forwarded to %s %jd",
-				 sig2str(sig), sig, entity, (intmax_t)pid);
+				 sig2str(sig), sig, entity, (intmax_t)cmd_pid);
 	else
 		log_warn_errno("signal %s (%d) could not be forwarded to %s %jd",
-					   sig2str(sig), sig, entity, (intmax_t)pid);
+					   sig2str(sig), sig, entity, (intmax_t)cmd_pid);
 }
 
 // start the command and wait on it to complete
-static __attribute__((noreturn))
+static __attribute__((noinline,noreturn))
 void run(char** const cmd)
 {
 	// become a subreaper
@@ -263,21 +276,17 @@ void run(char** const cmd)
 
 	sigprocmask(SIG_SETMASK, &sig_set, &old_set);
 
-	// ignore signals
-	signal(SIGTTIN, SIG_IGN);
-	signal(SIGTTOU, SIG_IGN);
-
 	// start the process
-	const pid_t pid = spawn(cmd, &old_set);
+	cmd_pid = spawn(cmd, &old_set);
 
 	// wait on signals
 	int sig;
 
 	while(sigwait(&sig_set, &sig) == 0) {
 		if(sig == SIGCHLD)
-			scan_children(pid);
+			scan_children();
 		else
-			forward_signal(pid, sig);
+			forward_signal(sig);
 	}
 
 	die_errno("signal wait failed");
@@ -306,21 +315,6 @@ void usage_exit(void)
 	exit(EXIT_FAILURE);
 }
 
-// this is for testing only
-static __attribute__((noinline,noreturn))
-void do_test(void)
-{
-	unsigned seconds = 5, count = 0;
-
-	warnx("### TEST MODE: entering sleep for %u seconds", seconds);
-
-	while((seconds = sleep(seconds)) > 0)
-		++count;
-
-	warnx("### TEST MODE: sleep completed (%u interrupts)", count);
-	exit(EXIT_SUCCESS);
-}
-
 // main
 int main(int argc, char** argv)
 {
@@ -329,7 +323,7 @@ int main(int argc, char** argv)
 
 	int c;
 
-	while((c = getopt(argc, argv, "+:qghv!")) != -1) {
+	while((c = getopt(argc, argv, "+:qghv")) != -1) {
 		switch(c) {
 			case 'q':
 				++log_level;
@@ -338,9 +332,6 @@ int main(int argc, char** argv)
 			case 'g':
 				use_group = 1;
 				break;
-
-			case '!':
-				do_test();
 
 			case 'h':
 				usage_exit();
@@ -356,6 +347,8 @@ int main(int argc, char** argv)
 
 	if(optind == argc)
 		die("missing command");
+
+	init();
 
 	run(&argv[optind]);
 }
