@@ -6,6 +6,8 @@ The purpose of `run` is to spawn a single child process, and then to wait for it
 descendants to complete, meanwhile reaping zombies and forwarding Unix signals to either the main
 child process, or to the whole process group.
 
+*Note:* Currently works in non-interactive mode only.
+
 ```
 ▶ ./run
 Usage:
