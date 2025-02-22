@@ -54,6 +54,9 @@ do {	\
 #define die(fmt, ...)		errx(EXIT_FAILURE, "[error] " fmt __VA_OPT__(,) __VA_ARGS__)
 #define die_errno(fmt, ...)	err(EXIT_FAILURE, "[error] " fmt __VA_OPT__(,) __VA_ARGS__)
 
+// attributes
+#define NORETURN	__attribute__((noinline,noreturn))
+
 // signal name mapper
 static
 const char* sig2str(const int sig)
@@ -154,7 +157,6 @@ void scan_children(void)
 	int status;
 
 	while((pid = next_proc(&status)) > 0) {
-		// log process status change
 		if(WIFEXITED(status)) {
 			const int code = WEXITSTATUS(status);
 
@@ -181,7 +183,7 @@ void scan_children(void)
 }
 
 // exec the given command
-static __attribute__((noinline,noreturn))
+static NORETURN
 void do_exec(char** const cmd, sigset_t* const sig_set)
 {
 	// create new process group, if required
@@ -220,22 +222,21 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set)
 	if(pid < 0)
 		die_errno("failed to start process `%s`", cmd[0]);
 
-	if(pid > 0) {
-		// parent process
-		if(use_group)
-			setpgid(pid, pid);
-
-		log_info("forked process `%s` (pid %jd)", cmd[0], (intmax_t)pid);
-		fclose(stdout);
-
-		if(!is_interactive)
-			fclose(stdin);
-
-		return pid;
-	}
-
 	// child process
-	do_exec(cmd, sig_set);
+	if(pid == 0)
+		do_exec(cmd, sig_set);
+
+	// parent process
+	if(use_group)
+		setpgid(pid, pid);
+
+	fclose(stdout);
+
+	if(!is_interactive)
+		fclose(stdin);
+
+	log_info("pid %jd: command `%s`", (intmax_t)pid, cmd[0]);
+	return pid;
 }
 
 // signal forwarding
@@ -253,12 +254,12 @@ void forward_signal(const int sig)
 }
 
 // start the command and wait on it to complete
-static __attribute__((noinline,noreturn))
+static NORETURN
 void run(char** const cmd)
 {
 	// become a subreaper
 	if(getpid() != 1 && prctl(PR_SET_CHILD_SUBREAPER, 1L) != 0)
-		die_errno("cannot become a subreaper");
+		die_errno("failed to become a subreaper");
 
 	// signals we want to handle
 	sigset_t sig_set, old_set;
@@ -308,7 +309,7 @@ const char usage_string[] =
 "  -v  Show version and exit.\n";
 
 // usage string display
-static __attribute__((noinline,noreturn))
+static NORETURN
 void usage_exit(void)
 {
 	fwrite(usage_string, sizeof(usage_string) - 1, 1, stderr);
