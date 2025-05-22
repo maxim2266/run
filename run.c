@@ -133,14 +133,6 @@ int send_signal(const int sig)
 	return kill(use_group ? -cmd_pid : cmd_pid, sig) ? errno : 0;
 }
 
-// initialisation
-static
-void init(void)
-{
-	if((is_interactive = isatty(STDIN_FILENO)) != 0)
-		die("not designed to run in interactive mode");	// just for now
-}
-
 static
 void on_proc_exit(const pid_t pid, const int code)
 {
@@ -230,10 +222,9 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set)
 	if(use_group)
 		setpgid(pid, pid);
 
+	// close unneeded handles
 	fclose(stdout);
-
-	if(!is_interactive)
-		fclose(stdin);
+	fclose(stdin);
 
 	log_info("pid %jd: command `%s`", (intmax_t)pid, cmd[0]);
 	return pid;
@@ -349,7 +340,8 @@ int main(int argc, char** argv)
 	if(optind == argc)
 		die("missing command");
 
-	init();
+	if((is_interactive = isatty(STDIN_FILENO)) != 0)
+		log_warn("running in interactive mode - not recommended");
 
 	run(&argv[optind]);
 }
