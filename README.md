@@ -6,8 +6,6 @@ The purpose of `run` is to spawn a single child process, and then to wait for it
 descendants to complete, meanwhile reaping zombies and forwarding Unix signals to either the main
 child process, or to the whole process group.
 
-*Note:* Currently works in non-interactive mode only.
-
 ```
 ▶ ./run
 Usage:
@@ -38,7 +36,7 @@ run: [info] exit code 0
    3903    3887    3903 /bin/bash
    4501    3903    4501 ps -o pid,ppid,pgid,args
 ```
-For some reason, most of the existing implementations have chosen not to wait for all processes
+For some reason, most of the existing implementations have chosen _not_ to wait for all processes
 to complete, for example here we have a stray child `sleep 5` still running after the `init`
 process is gone:
 ```
@@ -53,15 +51,18 @@ process is gone:
    4520       1    4519 sleep 5
    4521    3903    4521 ps -o pid,ppid,pgid,args
 ```
-IMO this simply undermines the whole idea of `init` process, because in a container environment
+IMO this simply undermines the whole idea of the `init` process, because in a container environment
 abandoned children will get no process to be reparented to, and will be killed. Using `run`
 a number of services can be launched with one simple command, for example
 ```
 sh -c 'service1 & service2 & service3 &'
 ```
-and then have them all controlled by the `run` process until they all terminate.  Other `init`s
+and then all of them will monitored by the `run` process until they all terminate. Other `init`s
 would require the launching script to also wait for all its children, a pointless re-implementation
 of the `init` functionality.
+
+In terms of the overall functionality `run` is more or less a replacement for
+[tini](https://github.com/krallin/tini).
 
 ### Installation
 The program can be compiled locally by running `make`, or `CC='musl-gcc -static' make` to
