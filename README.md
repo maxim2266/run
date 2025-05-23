@@ -64,6 +64,8 @@ of the `init` functionality.
 In terms of the overall functionality `run` is more or less a replacement for
 [tini](https://github.com/krallin/tini).
 
+`run` is not designed for interactive mode, use shell instead.
+
 ### Installation
 The program can be compiled locally by running `make`, or `CC='musl-gcc -static' make` to
 produce a statically liked binary. Alternatively, a statically linked binary can be compiled
@@ -82,8 +84,3 @@ Environment variables:
   IMAGE_NAME  name of the docker image (default: "run-local:latest")
 ```
 Also, see example [Docker file](dockerfile-example).
-
-### Running in interactive mode
-Generally, `init` daemons do not interact with TTY, and all implementations I've tried so far
-exibit various issues when invoked in interactive mode. Here I ignore this problem just for now,
-but I may have a look at it in the future.
