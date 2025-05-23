@@ -98,25 +98,6 @@ const char* sig2str(const int sig)
     }
 }
 
-// get `pid` of any sub-process that has changed its status
-static
-pid_t next_proc(int* const status) //-> pid, or -1 when no children left, or 0 when scan is complete
-{
-	pid_t pid;
-
-	while((pid = waitpid(-1, status, WNOHANG)) == -1) {
-		switch(errno) {
-			case EINTR:  continue;
-			case EAGAIN: return 0;
-			case ECHILD: return -1;
-			default:
-				die_errno("wait on process completion failed");
-		}
-	}
-
-	return pid;
-}
-
 // state variables
 static
 int cmd_exit_code = EXIT_SUCCESS,
@@ -125,6 +106,30 @@ int cmd_exit_code = EXIT_SUCCESS,
 
 static
 pid_t cmd_pid = 0;
+
+// get `pid` of any sub-process that has changed its status
+static
+pid_t next_proc(int* const status) //-> pid, or 0 when scan is complete
+{
+	pid_t pid;
+
+	while((pid = waitpid(-1, status, WNOHANG)) == -1) {
+		switch(errno) {
+			case EINTR:
+				continue;
+			case EAGAIN:
+				return 0;
+			case ECHILD:
+				// no more children left; terminate
+				log_info("exit code %d", cmd_exit_code);
+				exit(cmd_exit_code);
+			default:
+				die_errno("wait on process completion failed");
+		}
+	}
+
+	return pid;
+}
 
 // send a signal; returns errno
 static
@@ -165,12 +170,6 @@ void scan_children(void)
 			log_warn("pid %jd: killed by %s (%d)", (intmax_t)pid, sig2str(sig), sig);
 			on_proc_exit(pid, 128 + sig);
 		}
-	}
-
-	// terminate when no more children left
-	if(pid == -1) {
-		log_info("exit code %d", cmd_exit_code);
-		exit(cmd_exit_code);
 	}
 }
 
