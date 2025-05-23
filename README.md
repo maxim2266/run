@@ -81,4 +81,9 @@ Environment variables:
   DOCKER      docker command (default: "docker")
   IMAGE_NAME  name of the docker image (default: "run-local:latest")
 ```
-Also, see [Dockerfile](Dockerfile).
+Also, see example [Docker file](dockerfile-example).
+
+### Running in interactive mode
+Generally, `init` daemons do not interact with TTY, and all implementations I've tried so far
+exibit various issues when invoked in interactive mode. Here I ignore this problem just for now,
+but I may have a look at it in the future.

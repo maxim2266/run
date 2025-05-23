@@ -4,6 +4,7 @@ WORKDIR /build
 COPY    . .
 RUN     [ "make", "clean", "static" ]
 
+# just an example
 FROM       alpine:latest
 COPY       --from=builder /build/run /bin/run
-ENTRYPOINT ["/bin/run", "-g"]
+# CMD ["/bin/run", "-g", "your-service"]
