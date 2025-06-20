@@ -167,7 +167,7 @@ void scan_children(void)
 		} else if(WIFSIGNALED(status)) {
 			const int sig = WTERMSIG(status);
 
-			log_warn("pid %jd: killed by %s (%d)", (intmax_t)pid, sig2str(sig), sig);
+			log_warn("pid %jd: killed by %s(%d)", (intmax_t)pid, sig2str(sig), sig);
 			on_proc_exit(pid, 128 + sig);
 		}
 	}
@@ -188,13 +188,13 @@ void do_exec(char** const cmd, sigset_t* const sig_set)
 	execvp(cmd[0], cmd);
 
 	// `exec` failed
-	const int err = errno;
+	const int code = errno;
 
 	log_err_errno("failed to exec `%s`", cmd[0]);
 	fflush(NULL);
 
 	// exit code, see https://tldp.org/LDP/abs/html/exitcodes.html#EXITCODESREF
-	switch(err) {
+	switch(code) {
 		case EACCES:
 			_exit(126);
 		case ENOENT:
@@ -236,10 +236,10 @@ void forward_signal(const int sig)
 	const char* const entity = use_group ? "group" : "process";
 
 	if(send_signal(sig) == 0)
-		log_info("signal %s (%d) forwarded to %s %jd",
+		log_info("signal %s(%d) forwarded to %s %jd",
 				 sig2str(sig), sig, entity, (intmax_t)cmd_pid);
 	else
-		log_warn_errno("signal %s (%d) could not be forwarded to %s %jd",
+		log_warn_errno("signal %s(%d) could not be forwarded to %s %jd",
 					   sig2str(sig), sig, entity, (intmax_t)cmd_pid);
 }
 
