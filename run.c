@@ -55,7 +55,7 @@ do {	\
 #define die_errno(fmt, ...)	err(EXIT_FAILURE, "[error] " fmt __VA_OPT__(,) __VA_ARGS__)
 
 // attributes
-#define NORETURN	__attribute__((noinline,noreturn))
+#define NORETURN	static __attribute__((noinline,noreturn))
 
 // signal name mapper
 static
@@ -174,7 +174,7 @@ void scan_children(void)
 }
 
 // exec the given command
-static NORETURN
+NORETURN
 void do_exec(char** const cmd, sigset_t* const sig_set)
 {
 	// create new process group, if required
@@ -208,6 +208,11 @@ void do_exec(char** const cmd, sigset_t* const sig_set)
 static
 pid_t spawn(char** const cmd, sigset_t* const sig_set)
 {
+	// flush STDERR, as it might be buffered
+	if(fflush(stderr) != 0)
+		exit(125);	// because here STDERR is dead
+
+	// fork
 	const pid_t pid = fork();
 
 	if(pid < 0)
@@ -233,7 +238,7 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set)
 static
 void forward_signal(const int sig)
 {
-	const char* const entity = use_group ? "group" : "process";
+	const char* const entity = use_group ? "group" : "pid";
 
 	if(send_signal(sig) == 0)
 		log_info("signal %s(%d) forwarded to %s %jd",
@@ -244,27 +249,17 @@ void forward_signal(const int sig)
 }
 
 // start the command and wait on it to complete
-static NORETURN
+NORETURN
 void run(char** const cmd)
 {
 	// become a subreaper
 	if(getpid() != 1 && prctl(PR_SET_CHILD_SUBREAPER, 1L) != 0)
 		die_errno("failed to become a subreaper");
 
-	// signals we want to handle
+	// mask all signals
 	sigset_t sig_set, old_set;
 
-	sigemptyset(&sig_set);
-
-	sigaddset(&sig_set, SIGCHLD);
-	sigaddset(&sig_set, SIGTERM);
-	sigaddset(&sig_set, SIGINT);
-	sigaddset(&sig_set, SIGHUP);
-	sigaddset(&sig_set, SIGQUIT);
-	sigaddset(&sig_set, SIGUSR1);
-	sigaddset(&sig_set, SIGUSR2);
-	sigaddset(&sig_set, SIGPWR);
-
+	sigfillset(&sig_set);
 	sigprocmask(SIG_SETMASK, &sig_set, &old_set);
 
 	// start the process
@@ -274,10 +269,17 @@ void run(char** const cmd)
 	int sig;
 
 	while(sigwait(&sig_set, &sig) == 0) {
-		if(sig == SIGCHLD)
-			scan_children();
-		else
-			forward_signal(sig);
+		switch(sig) {
+			case SIGCHLD:
+				scan_children();
+				break;
+			case SIGPIPE:
+				log_warn("SIGPIPE (ignored)");
+				break;
+			default:
+				forward_signal(sig);
+				break;
+		}
 	}
 
 	die_errno("signal wait failed");
@@ -299,7 +301,7 @@ const char usage_string[] =
 "  -v  Show version and exit.\n";
 
 // usage string display
-static NORETURN
+NORETURN
 void usage_exit(void)
 {
 	fwrite(usage_string, sizeof(usage_string) - 1, 1, stderr);
