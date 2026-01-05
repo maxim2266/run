@@ -101,8 +101,7 @@ const char* sig2str(const int sig)
 // state variables
 static
 int cmd_exit_code = EXIT_SUCCESS,
-	is_interactive = 0,
-	use_group = 0;
+	has_tty = 0;
 
 static
 pid_t cmd_pid = 0;
@@ -120,6 +119,10 @@ pid_t next_proc(int* const status) //-> pid, or 0 when scan is complete
 			case EAGAIN:
 				return 0;
 			case ECHILD:
+                // restore terminal before exit
+                if(has_tty)
+                    tcsetpgrp(STDIN_FILENO, getpgrp());
+
 				// no more children left; terminate
 				log_info("exit code %d", cmd_exit_code);
 				exit(cmd_exit_code);
@@ -131,11 +134,11 @@ pid_t next_proc(int* const status) //-> pid, or 0 when scan is complete
 	return pid;
 }
 
-// send a signal; returns errno
+// send a signal to the process group
 static
 int send_signal(const int sig)
 {
-	return kill(use_group ? -cmd_pid : cmd_pid, sig) ? errno : 0;
+	return kill(-cmd_pid, sig) ? errno : 0;
 }
 
 static
@@ -177,9 +180,8 @@ void scan_children(void)
 NORETURN
 void do_exec(char** const cmd, sigset_t* const sig_set)
 {
-	// create new process group, if required
-	if(use_group)
-		setpgid(0, 0);
+	// always create new process group
+	setpgid(0, 0);
 
 	// restore signal mask
 	sigprocmask(SIG_SETMASK, sig_set, NULL);
@@ -208,6 +210,9 @@ void do_exec(char** const cmd, sigset_t* const sig_set)
 static
 pid_t spawn(char** const cmd, sigset_t* const sig_set)
 {
+	// tty
+	has_tty = isatty(STDIN_FILENO);
+
 	// flush STDERR, as it might be buffered
 	if(fflush(stderr) != 0)
 		exit(125);	// because here STDERR is dead
@@ -222,13 +227,16 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set)
 	if(pid == 0)
 		do_exec(cmd, sig_set);
 
-	// parent process
-	if(use_group)
-		setpgid(pid, pid);
+	// parent process: always set process group
+	setpgid(pid, pid);
 
-	// close unneeded handles
-	fclose(stdout);
-	fclose(stdin);
+    // give terminal to child if we have one
+    if(has_tty)
+        tcsetpgrp(STDIN_FILENO, pid);
+    else {
+		fclose(stdout);
+		fclose(stdin);
+	}
 
 	log_info("pid %jd: command `%s`", (intmax_t)pid, cmd[0]);
 	return pid;
@@ -238,14 +246,12 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set)
 static
 void forward_signal(const int sig)
 {
-	const char* const entity = use_group ? "group" : "pid";
-
 	if(send_signal(sig) == 0)
-		log_info("signal %s(%d) forwarded to %s %jd",
-				 sig2str(sig), sig, entity, (intmax_t)cmd_pid);
+		log_info("signal %s(%d) forwarded to group %jd",
+				 sig2str(sig), sig, (intmax_t)cmd_pid);
 	else
-		log_warn_errno("signal %s(%d) could not be forwarded to %s %jd",
-					   sig2str(sig), sig, entity, (intmax_t)cmd_pid);
+		log_warn_errno("signal %s(%d) could not be forwarded to group %jd",
+					   sig2str(sig), sig, (intmax_t)cmd_pid);
 }
 
 // start the command and wait on it to complete
@@ -296,7 +302,6 @@ const char usage_string[] =
 "\n"
 "Options:\n"
 "  -q  Reduce logging level (may be given more than once).\n"
-"  -g  Start `cmd` in its own process group.\n"
 "  -h  Show this help and exit.\n"
 "  -v  Show version and exit.\n";
 
@@ -316,14 +321,10 @@ int main(int argc, char** argv)
 
 	int c;
 
-	while((c = getopt(argc, argv, "+:qghv")) != -1) {
+	while((c = getopt(argc, argv, "+:qhv")) != -1) {
 		switch(c) {
 			case 'q':
 				++log_level;
-				break;
-
-			case 'g':
-				use_group = 1;
 				break;
 
 			case 'h':
@@ -340,9 +341,6 @@ int main(int argc, char** argv)
 
 	if(optind == argc)
 		die("missing command");
-
-	if((is_interactive = isatty(STDIN_FILENO)) != 0)
-		log_warn("running in interactive mode - not recommended");
 
 	run(&argv[optind]);
 }
