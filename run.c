@@ -59,8 +59,7 @@ do {	\
 
 // signal name mapper
 static
-const char* sig2str(const int sig)
-{
+const char* sig2str(const int sig) {
 	// https://man7.org/linux/man-pages/man7/signal.7.html
 	switch(sig) {
 		case SIGABRT:	return "SIGABRT";
@@ -108,8 +107,7 @@ pid_t cmd_pid = 0;
 
 // get `pid` of any sub-process that has changed its status
 static
-pid_t next_proc(int* const status) //-> pid, or 0 when scan is complete
-{
+pid_t next_proc(int* const status) { //-> pid, or 0 when scan is complete
 	pid_t pid;
 
 	while((pid = waitpid(-1, status, WNOHANG)) == -1) {
@@ -136,14 +134,10 @@ pid_t next_proc(int* const status) //-> pid, or 0 when scan is complete
 
 // send a signal to the process group
 static
-int send_signal(const int sig)
-{
-	return kill(-cmd_pid, sig) ? errno : 0;
-}
+int send_signal(const int sig) { return kill(-cmd_pid, sig) ? errno : 0; }
 
 static
-void on_proc_exit(const pid_t pid, const int code)
-{
+void on_proc_exit(const pid_t pid, const int code) {
 	// exit code from the main command
 	if(pid == cmd_pid && cmd_exit_code == EXIT_SUCCESS)
 		cmd_exit_code = code;
@@ -151,8 +145,7 @@ void on_proc_exit(const pid_t pid, const int code)
 
 // scan all children and handle their status changes
 static
-void scan_children(void)
-{
+void scan_children(void) {
 	pid_t pid;
 	int status;
 
@@ -178,8 +171,7 @@ void scan_children(void)
 
 // exec the given command
 NORETURN
-void do_exec(char** const cmd, sigset_t* const sig_set)
-{
+void do_exec(char** const cmd, sigset_t* const sig_set) {
 	// always create new process group
 	setpgid(0, 0);
 
@@ -208,8 +200,7 @@ void do_exec(char** const cmd, sigset_t* const sig_set)
 
 // spawn a new process
 static
-pid_t spawn(char** const cmd, sigset_t* const sig_set)
-{
+pid_t spawn(char** const cmd, sigset_t* const sig_set) {
 	// tty
 	has_tty = isatty(STDIN_FILENO);
 
@@ -244,8 +235,7 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set)
 
 // signal forwarding
 static
-void forward_signal(const int sig)
-{
+void forward_signal(const int sig) {
 	if(send_signal(sig) == 0)
 		log_info("signal %s(%d) forwarded to group %jd",
 				 sig2str(sig), sig, (intmax_t)cmd_pid);
@@ -256,8 +246,7 @@ void forward_signal(const int sig)
 
 // start the command and wait on it to complete
 NORETURN
-void run(char** const cmd)
-{
+void run(char** const cmd) {
 	// become a subreaper
 	if(getpid() != 1 && prctl(PR_SET_CHILD_SUBREAPER, 1L) != 0)
 		die_errno("failed to become a subreaper");
@@ -307,15 +296,13 @@ const char usage_string[] =
 
 // usage string display
 NORETURN
-void usage_exit(void)
-{
+void usage_exit(void) {
 	fwrite(usage_string, sizeof(usage_string) - 1, 1, stderr);
 	exit(EXIT_FAILURE);
 }
 
 // main
-int main(int argc, char** argv)
-{
+int main(int argc, char** argv) {
 	if(argc == 1)
 		usage_exit();
 
