@@ -284,7 +284,7 @@ void run(char** const cmd) {
 static
 const char usage_string[] =
 "Usage:\n"
-"  run [-gq] cmd [args...]\n"
+"  run [-q] cmd [args...]\n"
 "  run [-hv]\n"
 "\n"
 "Start `cmd`, then wait for it and all its descendants to complete.\n"

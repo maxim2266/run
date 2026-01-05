@@ -3,20 +3,18 @@
 [![License: BSD 3 Clause](https://img.shields.io/badge/License-BSD_3--Clause-yellow.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
 The purpose of `run` is to spawn a single child process, and then to wait for it and all its
-descendants to complete, meanwhile reaping zombies and forwarding Unix signals to either the main
-child process, or to the whole process group.
+descendants to complete, meanwhile reaping zombies and forwarding Unix signals to all subprocesses.
 
 ```
-▶ ./run
+▶ ./run -h
 Usage:
-  run [-gq] cmd [args...]
+  run [-q] cmd [args...]
   run [-hv]
 
 Start `cmd`, then wait for it and all its descendants to complete.
 
 Options:
   -q  Reduce logging level (may be given more than once).
-  -g  Start `cmd` in its own process group.
   -h  Show this help and exit.
   -v  Show version and exit.
 ```
@@ -57,14 +55,12 @@ a number of services can be launched with one simple command, for example
 ```
 sh -c 'service1 & service2 & service3 &'
 ```
-and then all of them will monitored by the `run` process until they all terminate. Other `init`s
+and then all of them will be monitored by the `run` process until they all terminate. Other `init`s
 would require the launching script to also wait for all its children, a pointless re-implementation
 of the `init` functionality.
 
 In terms of the overall functionality `run` is more or less a replacement for
 [tini](https://github.com/krallin/tini).
-
-`run` is not designed for interactive mode, use shell instead.
 
 ### Installation
 The program can be compiled locally by running `make`, or `CC='musl-gcc -static' make` to
