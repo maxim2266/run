@@ -8,15 +8,18 @@ descendants to complete, meanwhile reaping zombies and forwarding Unix signals t
 ```
 ▶ ./run -h
 Usage:
-  run [-q] cmd [args...]
+  run [-q] [-s SIG] cmd [args...]
   run [-hv]
 
 Start `cmd`, then wait for it and all its descendants to complete.
 
 Options:
-  -q  Reduce logging level (may be given more than once).
-  -h  Show this help and exit.
-  -v  Show version and exit.
+  -q       Reduce logging level (may be given more than once).
+  -s SIG   Send signal SIG to all processes when the main one terminates;
+           SIG can be any of:
+             SIGINT, SIGTERM, SIGKILL, SIGQUIT, SIGHUP, SIGUSR1, SIGUSR2.
+  -h       Show this help and exit.
+  -v       Show version and exit.
 ```
 
 ### Rationale

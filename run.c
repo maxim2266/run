@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <signal.h>
@@ -100,7 +101,8 @@ const char* sig2str(const int sig) {
 // state variables
 static
 int cmd_exit_code = EXIT_SUCCESS,
-	has_tty = 0;
+	has_tty = 0,
+	notification_signal = 0;
 
 static
 pid_t cmd_pid = 0;
@@ -132,12 +134,27 @@ pid_t next_proc(int* const status) { //-> pid, or 0 when scan is complete
 	return pid;
 }
 
+// signal forwarding
+static
+void forward_signal(const int sig) {
+	if(kill(-cmd_pid, sig) == 0)
+		log_info("signal %s(%d) forwarded to group %jd",
+				 sig2str(sig), sig, (intmax_t)cmd_pid);
+	else
+		log_warn_errno("signal %s(%d) could not be forwarded to group %jd",
+					   sig2str(sig), sig, (intmax_t)cmd_pid);
+}
+
 // exit code extractor
 static
 void on_proc_exit(const pid_t pid, const int code) {
 	// exit code from the main command
-	if(pid == cmd_pid && cmd_exit_code == EXIT_SUCCESS)
+	if(pid == cmd_pid) {
 		cmd_exit_code = code;
+
+		if(notification_signal != 0)
+			forward_signal(notification_signal);
+	}
 }
 
 // scan all children and handle their status changes
@@ -231,17 +248,6 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set) {
 	return pid;
 }
 
-// signal forwarding
-static
-void forward_signal(const int sig) {
-	if(kill(-cmd_pid, sig) == 0)
-		log_info("signal %s(%d) forwarded to group %jd",
-				 sig2str(sig), sig, (intmax_t)cmd_pid);
-	else
-		log_warn_errno("signal %s(%d) could not be forwarded to group %jd",
-					   sig2str(sig), sig, (intmax_t)cmd_pid);
-}
-
 // start the command and wait on it to complete
 NORETURN
 void run(char** const cmd) {
@@ -282,15 +288,18 @@ void run(char** const cmd) {
 static
 const char usage_string[] =
 "Usage:\n"
-"  run [-q] cmd [args...]\n"
+"  run [-q] [-s SIG] cmd [args...]\n"
 "  run [-hv]\n"
 "\n"
 "Start `cmd`, then wait for it and all its descendants to complete.\n"
 "\n"
 "Options:\n"
-"  -q  Reduce logging level (may be given more than once).\n"
-"  -h  Show this help and exit.\n"
-"  -v  Show version and exit.\n";
+"  -q       Reduce logging level (may be given more than once).\n"
+"  -s SIG   Send signal SIG to all processes when the main one terminates;\n"
+"           SIG can be any of:\n"
+"             SIGINT, SIGTERM, SIGKILL, SIGQUIT, SIGHUP, SIGUSR1, SIGUSR2.\n"
+"  -h       Show this help and exit.\n"
+"  -v       Show version and exit.\n";
 
 // usage string display
 NORETURN
@@ -306,7 +315,7 @@ int main(int argc, char** argv) {
 
 	int c;
 
-	while((c = getopt(argc, argv, "+:qhv")) != -1) {
+	while((c = getopt(argc, argv, "+:qhvs:")) != -1) {
 		switch(c) {
 			case 'q':
 				++log_level;
@@ -318,6 +327,21 @@ int main(int argc, char** argv) {
 			case 'v':
 				fwrite(XSTR(VER) "\n", sizeof(XSTR(VER)), 1, stderr);
 				exit(EXIT_FAILURE);
+
+			case 's':
+				notification_signal = (strcmp(optarg, "SIGINT") == 0)	? SIGINT
+									: (strcmp(optarg, "SIGTERM") == 0)	? SIGTERM
+									: (strcmp(optarg, "SIGKILL") == 0)	? SIGKILL
+									: (strcmp(optarg, "SIGQUIT") == 0)	? SIGQUIT
+									: (strcmp(optarg, "SIGHUP") == 0)	? SIGHUP
+									: (strcmp(optarg, "SIGUSR1") == 0)	? SIGUSR1
+									: (strcmp(optarg, "SIGUSR2") == 0)	? SIGUSR2
+									: 0;
+
+				if(notification_signal == 0)
+					die("unrecognised signal name: `%s`", optarg);
+
+				break;
 
 			case '?':
 				die("unrecognised option `-%c`", optopt);
