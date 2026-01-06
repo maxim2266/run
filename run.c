@@ -118,8 +118,8 @@ pid_t next_proc(int* const status) { //-> pid, or 0 when scan is complete
 				return 0;
 			case ECHILD:
                 // restore terminal before exit
-                if(has_tty)
-                    tcsetpgrp(STDIN_FILENO, getpgrp());
+                if(has_tty && tcsetpgrp(STDIN_FILENO, getpgrp()))
+					log_warn_errno("failed to restore terminal foreground process group");
 
 				// no more children left; terminate
 				log_info("exit code %d", cmd_exit_code);
@@ -132,10 +132,7 @@ pid_t next_proc(int* const status) { //-> pid, or 0 when scan is complete
 	return pid;
 }
 
-// send a signal to the process group
-static
-int send_signal(const int sig) { return kill(-cmd_pid, sig) ? errno : 0; }
-
+// exit code extractor
 static
 void on_proc_exit(const pid_t pid, const int code) {
 	// exit code from the main command
@@ -204,7 +201,7 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set) {
 	// tty
 	has_tty = isatty(STDIN_FILENO);
 
-	// flush STDERR, as it might be buffered
+	// flush STDERR, as it may be buffered
 	if(fflush(stderr) != 0)
 		exit(125);	// because here STDERR is dead
 
@@ -216,15 +213,16 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set) {
 
 	// child process
 	if(pid == 0)
-		do_exec(cmd, sig_set);
+		do_exec(cmd, sig_set);	// never returns
 
 	// parent process: always set process group
 	setpgid(pid, pid);
 
-    // give terminal to child if we have one
-    if(has_tty)
-        tcsetpgrp(STDIN_FILENO, pid);
-    else {
+    // give terminal (if any) to child
+    if(has_tty) {
+        if(tcsetpgrp(STDIN_FILENO, pid))
+			log_warn_errno("failed to set terminal foreground process group");
+	} else {
 		fclose(stdout);
 		fclose(stdin);
 	}
@@ -236,7 +234,7 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set) {
 // signal forwarding
 static
 void forward_signal(const int sig) {
-	if(send_signal(sig) == 0)
+	if(kill(-cmd_pid, sig) == 0)
 		log_info("signal %s(%d) forwarded to group %jd",
 				 sig2str(sig), sig, (intmax_t)cmd_pid);
 	else
