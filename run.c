@@ -138,17 +138,16 @@ pid_t next_proc(int* const status) { //-> pid, or 0 when scan is complete
 static
 void forward_signal(const int sig) {
 	if(kill(-cmd_pid, sig) == 0)
-		log_info("signal %s(%d) forwarded to group %jd",
+		log_info("signal %s(%d) sent to group %jd",
 				 sig2str(sig), sig, (intmax_t)cmd_pid);
 	else
-		log_warn_errno("signal %s(%d) could not be forwarded to group %jd",
+		log_warn_errno("signal %s(%d) could not be sent to group %jd",
 					   sig2str(sig), sig, (intmax_t)cmd_pid);
 }
 
-// exit code extractor
+// store main exit code and signal other processes
 static
 void on_proc_exit(const pid_t pid, const int code) {
-	// exit code from the main command
 	if(pid == cmd_pid) {
 		cmd_exit_code = code;
 
@@ -167,11 +166,7 @@ void scan_children(void) {
 		if(WIFEXITED(status)) {
 			const int code = WEXITSTATUS(status);
 
-			if(code == EXIT_SUCCESS)
-				log_info("pid %jd: completed", (intmax_t)pid);
-			else
-				log_warn("pid %jd: failed with code %d", (intmax_t)pid, code);
-
+			log_warn("pid %jd: exited with code %d", (intmax_t)pid, code);
 			on_proc_exit(pid, code);
 
 		} else if(WIFSIGNALED(status)) {
@@ -296,8 +291,7 @@ const char usage_string[] =
 "Options:\n"
 "  -q       Reduce logging level (may be given more than once).\n"
 "  -s SIG   Send signal SIG to all processes when the main one terminates;\n"
-"           SIG can be any of:\n"
-"             SIGINT, SIGTERM, SIGKILL, SIGQUIT, SIGHUP, SIGUSR1, SIGUSR2.\n"
+"           SIG can be any of: INT, TERM, KILL, QUIT, HUP, USR1, USR2.\n"
 "  -h       Show this help and exit.\n"
 "  -v       Show version and exit.\n";
 
@@ -329,13 +323,16 @@ int main(int argc, char** argv) {
 				exit(EXIT_FAILURE);
 
 			case 's':
-				notification_signal = (strcmp(optarg, "SIGINT") == 0)	? SIGINT
-									: (strcmp(optarg, "SIGTERM") == 0)	? SIGTERM
-									: (strcmp(optarg, "SIGKILL") == 0)	? SIGKILL
-									: (strcmp(optarg, "SIGQUIT") == 0)	? SIGQUIT
-									: (strcmp(optarg, "SIGHUP") == 0)	? SIGHUP
-									: (strcmp(optarg, "SIGUSR1") == 0)	? SIGUSR1
-									: (strcmp(optarg, "SIGUSR2") == 0)	? SIGUSR2
+				if(optarg[0] == 'S' && optarg[1] == 'I' && optarg[2] == 'G')
+					optarg += 3;
+
+				notification_signal = (strcmp(optarg, "INT") == 0)	? SIGINT
+									: (strcmp(optarg, "TERM") == 0)	? SIGTERM
+									: (strcmp(optarg, "KILL") == 0)	? SIGKILL
+									: (strcmp(optarg, "QUIT") == 0)	? SIGQUIT
+									: (strcmp(optarg, "HUP") == 0)	? SIGHUP
+									: (strcmp(optarg, "USR1") == 0)	? SIGUSR1
+									: (strcmp(optarg, "USR2") == 0)	? SIGUSR2
 									: 0;
 
 				if(notification_signal == 0)

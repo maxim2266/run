@@ -16,8 +16,7 @@ Start `cmd`, then wait for it and all its descendants to complete.
 Options:
   -q       Reduce logging level (may be given more than once).
   -s SIG   Send signal SIG to all processes when the main one terminates;
-           SIG can be any of:
-             SIGINT, SIGTERM, SIGKILL, SIGQUIT, SIGHUP, SIGUSR1, SIGUSR2.
+           SIG can be any of: INT, TERM, KILL, QUIT, HUP, USR1, USR2.
   -h       Show this help and exit.
   -v       Show version and exit.
 ```
