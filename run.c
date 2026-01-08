@@ -116,8 +116,10 @@ pid_t next_proc(int* const status) { //-> pid, or 0 when scan is complete
 		switch(errno) {
 			case EINTR:
 				continue;
+
 			case EAGAIN:
 				return 0;
+
 			case ECHILD:
                 // restore terminal before exit
                 if(has_tty && tcsetpgrp(STDIN_FILENO, getpgrp()))
@@ -126,6 +128,7 @@ pid_t next_proc(int* const status) { //-> pid, or 0 when scan is complete
 				// no more children left; terminate
 				log_info("exit code %d", cmd_exit_code);
 				exit(cmd_exit_code);
+
 			default:
 				die_errno("wait on process completion failed");
 		}
@@ -181,8 +184,12 @@ void scan_children(void) {
 // exec the given command
 NORETURN
 void do_exec(char** const cmd, sigset_t* const sig_set) {
-	// always create new process group
+	// create new process group
 	setpgid(0, 0);
+
+	// grab TTY, if any
+	if(has_tty && tcsetpgrp(STDIN_FILENO, getpgrp()))
+		log_warn_errno("failed to set terminal foreground process group");
 
 	// restore signal mask
 	sigprocmask(SIG_SETMASK, sig_set, NULL);
@@ -198,20 +205,17 @@ void do_exec(char** const cmd, sigset_t* const sig_set) {
 
 	// exit code, see https://tldp.org/LDP/abs/html/exitcodes.html#EXITCODESREF
 	switch(code) {
-		case EACCES:
-			_exit(126);
-		case ENOENT:
-			_exit(127);
-		default:
-			_exit(EXIT_FAILURE);
+		case EACCES: _exit(126);
+		case ENOENT: _exit(127);
+		default:     _exit(EXIT_FAILURE);
 	}
 }
 
 // spawn a new process
 static
 pid_t spawn(char** const cmd, sigset_t* const sig_set) {
-	// tty
-	has_tty = isatty(STDIN_FILENO);
+	// TTY
+	has_tty = isatty(STDIN_FILENO) && (tcgetpgrp(STDIN_FILENO) == getpgrp());
 
 	// flush STDERR, as it may be buffered
 	if(fflush(stderr) != 0)
@@ -230,11 +234,8 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set) {
 	// parent process: always set process group
 	setpgid(pid, pid);
 
-    // give terminal (if any) to child
-    if(has_tty) {
-        if(tcsetpgrp(STDIN_FILENO, pid))
-			log_warn_errno("failed to set terminal foreground process group");
-	} else {
+    // close unneeded handles
+    if(!has_tty) {
 		fclose(stdout);
 		fclose(stdin);
 	}
@@ -264,12 +265,16 @@ void run(char** const cmd) {
 
 	while(sigwait(&sig_set, &sig) == 0) {
 		switch(sig) {
+			case SIGPIPE:
+			case SIGTTOU: // we are in the background trying terminal I/O
+			case SIGTTIN:
+				// silently ignore
+				break;
+
 			case SIGCHLD:
 				scan_children();
 				break;
-			case SIGPIPE:
-				log_warn("SIGPIPE (ignored)");
-				break;
+
 			default:
 				forward_signal(sig);
 				break;
@@ -322,23 +327,25 @@ int main(int argc, char** argv) {
 				fwrite(XSTR(VER) "\n", sizeof(XSTR(VER)), 1, stderr);
 				exit(EXIT_FAILURE);
 
-			case 's':
-				if(optarg[0] == 'S' && optarg[1] == 'I' && optarg[2] == 'G')
-					optarg += 3;
+			case 's': {
+				const char* s = (optarg[0] == 'S' && optarg[1] == 'I' && optarg[2] == 'G')
+							  ? optarg + 3
+							  : optarg;
 
-				notification_signal = (strcmp(optarg, "INT") == 0)	? SIGINT
-									: (strcmp(optarg, "TERM") == 0)	? SIGTERM
-									: (strcmp(optarg, "KILL") == 0)	? SIGKILL
-									: (strcmp(optarg, "QUIT") == 0)	? SIGQUIT
-									: (strcmp(optarg, "HUP") == 0)	? SIGHUP
-									: (strcmp(optarg, "USR1") == 0)	? SIGUSR1
-									: (strcmp(optarg, "USR2") == 0)	? SIGUSR2
+				notification_signal = (strcmp(s, "INT") == 0)	? SIGINT
+									: (strcmp(s, "TERM") == 0)	? SIGTERM
+									: (strcmp(s, "KILL") == 0)	? SIGKILL
+									: (strcmp(s, "QUIT") == 0)	? SIGQUIT
+									: (strcmp(s, "HUP") == 0)	? SIGHUP
+									: (strcmp(s, "USR1") == 0)	? SIGUSR1
+									: (strcmp(s, "USR2") == 0)	? SIGUSR2
 									: 0;
 
 				if(notification_signal == 0)
 					die("unrecognised signal name: `%s`", optarg);
 
 				break;
+			}
 
 			case '?':
 				die("unrecognised option `-%c`", optopt);
