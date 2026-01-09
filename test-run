@@ -77,9 +77,9 @@ test_case 'docker stop' <<-EOF
 		sh -c 'trap '\''echo Stopping'\'' TERM; sleep 2 & sleep 1')
 
 	sleep 0.5
-	docker stop -t 3 "\$CID"
+	docker stop -t 3 "\$CID" >/dev/null
     docker logs "\$CID" | grep -q 'Stopping'
-    docker rm -f "\$CID"
+    docker rm -f "\$CID" >/dev/null
 EOF
 
 test_case 'invalid command' <<-EOF
@@ -95,9 +95,9 @@ test_case 'recursive stop' <<-EOF
 	set -e
 	CID=\$($RUN -d $IMAGE /bin/run /bin/run /bin/run sleep 1)
 	sleep 0.5
-	docker stop -t 2 "\$CID"
+	docker stop -t 2 "\$CID" >/dev/null
 	RET=\$(docker wait "\$CID")
-	docker rm -f "\$CID"
+	docker rm -f "\$CID" >/dev/null
 	[ \$RET -eq 143 ]
 EOF
 
