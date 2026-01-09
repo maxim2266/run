@@ -91,6 +91,16 @@ test_case 'recursive error propagation' <<-EOF
 	[ \$? -eq 42 ]
 EOF
 
+test_case 'recursive stop' <<-EOF
+	set -e
+	CID=\$($RUN -d $IMAGE /bin/run /bin/run /bin/run sleep 1)
+	sleep 0.5
+	docker stop -t 2 "\$CID"
+	RET=\$(docker wait "\$CID")
+	docker rm -f "\$CID"
+	[ \$RET -eq 143 ]
+EOF
+
 test_case 'STDIN handling' <<-EOF
     echo 'hello world' | $RUN --rm -i $IMAGE /bin/run cat | grep -q 'hello world'
 EOF
