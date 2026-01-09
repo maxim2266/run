@@ -37,21 +37,11 @@ Options:
 ```shell
 git clone https://github.com/maxim2266/run.git
 cd run
+make image
 ```
-and then build your container with dockerfile like
-```docker
-FROM    alpine:latest AS builder
-RUN     [ "apk", "add", "--no-cache", "gcc", "make", "musl-dev", "git" ]
-WORKDIR /build
-COPY    . .
-RUN     [ "make", "clean", "static" ]
-
-# just an example
-FROM       alpine:latest
-COPY       --from=builder /build/run /bin/run
-ENTRYPOINT ["/bin/run", "your-service"]
-# replace "your-service" with your actual command.
-```
+The last command creates an image according to the provided [dockerfile](runner.dockerfile).
+The program can also be built locally with `make` command. Tests can be run with
+`make test`.
 
 ### License
 BSD-3-Clause

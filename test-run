@@ -1,0 +1,98 @@
+#!/bin/sh -e
+
+SCRIPT="$(basename "$0")"
+
+die() {
+	echo >&2 "$SCRIPT: [error]" "$@"
+	exit 1
+}
+
+log() {
+	echo >&2 "$SCRIPT: [info]" "$@"
+}
+
+RUN="docker run --network none"
+
+# docker image
+IMAGE="${1:?missing image name}"
+
+# cleanup
+cleanup() {
+    log "cleaning up..."
+	IDS="$(docker ps -aqf "ancestor=$IMAGE")"
+	[ -z "$IDS" ] || docker rm -f "$IDS"
+	log "all done."
+}
+
+trap cleanup EXIT
+trap 'die "interrupted!"' INT TERM HUP QUIT
+
+# test runner
+TOTAL=0
+
+test_case() {
+	TOTAL=$((TOTAL + 1))
+	log "test $TOTAL: $1"
+	sh || die 'FAILED'
+	log 'passed'
+}
+
+# test cases
+test_case 'version' <<-EOF
+	! $RUN --rm $IMAGE /bin/run -v
+EOF
+
+test_case 'simple invocation' <<-EOF
+	$RUN --rm $IMAGE /bin/run sleep 0.1
+EOF
+
+test_case 'simple error propagation' <<-EOF
+	$RUN --rm $IMAGE /bin/run sh -c 'exit 42'
+	[ \$? -eq 42 ]
+EOF
+
+test_case 'multiple processes (1)' <<-EOF
+	$RUN --rm $IMAGE /bin/run sh -c 'sleep 0.1 & sleep 0.2 & sleep 0.3 &'
+EOF
+
+test_case 'multiple processes (2)' <<-EOF
+	$RUN --rm $IMAGE /bin/run sh -c 'sleep 0.1 & sleep 0.2 & sleep 0.3'
+EOF
+
+test_case 'multiple processes with error' <<-EOF
+	$RUN --rm $IMAGE /bin/run \
+		sh -c 'sleep 0.1 & sleep 0.2 & sleep 0.3 & sleep 0.1 ; exit 42'
+	[ \$? -eq 42 ]
+EOF
+
+test_case 'multiple processes with notification' <<-EOF
+	$RUN --rm $IMAGE /bin/run -s USR2 \
+		sh -c 'sleep 0.2 & sleep 0.3 & sleep 0.4 & sleep 0.1 ; exit 42'
+	[ \$? -eq 42 ]
+EOF
+
+test_case 'docker stop' <<-EOF
+	set -e
+	CID=\$($RUN -d $IMAGE /bin/run \
+		sh -c 'trap '\''echo Stopping'\'' TERM; sleep 2 & sleep 1')
+
+	sleep 0.5
+	docker stop -t 3 "\$CID"
+    docker logs "\$CID" | grep -q 'Stopping'
+    docker rm -f "\$CID"
+EOF
+
+test_case 'invalid command' <<-EOF
+    ! $RUN --rm $IMAGE /bin/run nonexistent-command
+EOF
+
+test_case 'recursive error propagation' <<-EOF
+	$RUN --rm $IMAGE /bin/run /bin/run /bin/run sh -c 'exit 42'
+	[ \$? -eq 42 ]
+EOF
+
+test_case 'STDIN handling' <<-EOF
+    echo 'hello world' | $RUN --rm -i $IMAGE /bin/run cat | grep -q 'hello world'
+EOF
+
+log "completed $TOTAL test cases"
