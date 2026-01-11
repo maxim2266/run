@@ -7,7 +7,7 @@ reaping zombie processes and forwarding Unix signals to the entire process group
 
 ### Motivation
 Years ago, when the concept of the "cloud" was just emerging, I imagined it as a collection of
-networked Linux computers, each fully set up, and with an `init` daemon I could configure to
+networked Linux computers, each fully set up, and with a service manager I could configure to
 run my software. It turned out I was wrong: Docker containers run only one process, and cloud
 providers essentially charge us per each process we start. Not a good state of affairs, but
 I cannot change the world. All I want is to run inside my container something as simple as:
