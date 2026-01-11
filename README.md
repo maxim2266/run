@@ -2,7 +2,7 @@
 
 [![License: BSD 3 Clause](https://img.shields.io/badge/License-BSD_3--Clause-yellow.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
-`run` spawns a single child process, then waits for it and all descendants to complete, while
+`run` spawns a single child process, then waits for it and _all descendants_ to complete, while
 reaping zombie processes and forwarding Unix signals to the entire process group.
 
 ### Motivation
