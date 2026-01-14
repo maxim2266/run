@@ -128,12 +128,22 @@ const char* sig2str(const int sig) {
 
 // state variables
 static
-int cmd_exit_code = EXIT_SUCCESS,
+int exit_code = 0,
 	has_tty = 0,
-	notification_signal = 0;
+	term_signal = 0,
+	kill_timeout = 0,
+	min_error = 0,
+	alarm_set = 0;
 
 static
-pid_t cmd_pid = 0;
+pid_t proc_group = 0;
+
+// TTY assignment
+static
+void assign_tty(const pid_t pgid) {
+	if(has_tty && tcsetpgrp(STDIN_FILENO, pgid))
+		log_warn_errno("failed to assign TTY to process group %jd", (intmax_t)pgid);
+}
 
 // get `pid` of any sub-process that has changed its status
 static
@@ -149,13 +159,9 @@ pid_t next_proc(int* const status) { //-> pid, or 0 when scan is complete
 				return 0;
 
 			case ECHILD:
-                // restore terminal before exit
-                if(has_tty && tcsetpgrp(STDIN_FILENO, getpgrp()))
-					log_warn_errno("failed to restore terminal foreground process group");
-
 				// no more children left; terminate
-				log_info("exit code %d", cmd_exit_code);
-				exit(cmd_exit_code);
+				log_info("exit code %d", exit_code);
+				exit(exit_code);
 
 			default:
 				die_errno("wait on process completion failed");
@@ -168,44 +174,56 @@ pid_t next_proc(int* const status) { //-> pid, or 0 when scan is complete
 // signal forwarding
 static
 void forward_signal(const int sig) {
-	if(kill(-cmd_pid, sig) == 0)
+	if(kill(-proc_group, sig) == 0)
 		log_info("signal %s(%d) sent to group %jd",
-				 sig2str(sig), sig, (intmax_t)cmd_pid);
+				 sig2str(sig), sig, (intmax_t)proc_group);
 	else
 		log_warn_errno("signal %s(%d) could not be sent to group %jd",
-					   sig2str(sig), sig, (intmax_t)cmd_pid);
-}
-
-// store main exit code and signal other processes
-static
-void on_proc_exit(const pid_t pid, const int code) {
-	if(pid == cmd_pid) {
-		cmd_exit_code = code;
-
-		if(notification_signal != 0)
-			forward_signal(notification_signal);
-	}
+					   sig2str(sig), sig, (intmax_t)proc_group);
 }
 
 // scan all children and handle their status changes
 static
 void scan_children(void) {
 	pid_t pid;
-	int status;
+	int status, notify = 0;
 
 	while((pid = next_proc(&status)) > 0) {
 		if(WIFEXITED(status)) {
-			const int code = WEXITSTATUS(status);
+			status = WEXITSTATUS(status);
 
-			log_warn("pid %jd: exited with code %d", (intmax_t)pid, code);
-			on_proc_exit(pid, code);
+			if(status == 0)
+				log_info("pid %jd: exited with code %d", (intmax_t)pid, status);
+			else
+				log_warn("pid %jd: failed with code %d", (intmax_t)pid, status);
 
 		} else if(WIFSIGNALED(status)) {
 			const int sig = WTERMSIG(status);
 
 			log_warn("pid %jd: killed by %s(%d)", (intmax_t)pid, sig2str(sig), sig);
-			on_proc_exit(pid, 128 + sig);
-		}
+			status = sig + 128;
+
+		} else
+			continue;
+
+		// grab TTY on main exit
+		if(pid == proc_group)
+			assign_tty(getpgrp());
+
+		// exit code
+		if(!exit_code)
+			exit_code = status;
+
+		// notification flag
+		if(!notify && !alarm_set)
+			notify = (status >= min_error);
+	}
+
+	if(notify && term_signal) {
+		// send terminating signal
+		forward_signal(term_signal);
+		alarm(kill_timeout);
+		alarm_set = 1;
 	}
 }
 
@@ -216,8 +234,7 @@ void do_exec(char** const cmd, sigset_t* const sig_set) {
 	setpgid(0, 0);
 
 	// grab TTY, if any
-	if(has_tty && tcsetpgrp(STDIN_FILENO, getpgrp()))
-		log_warn_errno("failed to set terminal foreground process group");
+	assign_tty(getpgrp());
 
 	// restore signal mask
 	sigprocmask(SIG_SETMASK, sig_set, NULL);
@@ -242,13 +259,6 @@ void do_exec(char** const cmd, sigset_t* const sig_set) {
 // spawn a new process
 static
 pid_t spawn(char** const cmd, sigset_t* const sig_set) {
-	// TTY
-	has_tty = isatty(STDIN_FILENO) && (tcgetpgrp(STDIN_FILENO) == getpgrp());
-
-	// flush STDERR, as it may be buffered
-	if(fflush(stderr) != 0)
-		exit(125);	// because here STDERR is dead
-
 	// fork
 	const pid_t pid = fork();
 
@@ -259,25 +269,26 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set) {
 	if(pid == 0)
 		do_exec(cmd, sig_set);	// never returns
 
-	// parent process: always set process group
+	// parent process
 	setpgid(pid, pid);
-
-    // close unneeded handles
-    if(!has_tty) {
-		fclose(stdout);
-		fclose(stdin);
-	}
-
 	log_info("pid %jd: command `%s`", (intmax_t)pid, cmd[0]);
+
 	return pid;
 }
 
 // start the command and wait on it to complete
 NORETURN
 void run(char** const cmd) {
+	// flush STDERR, as it may be buffered
+	if(fflush(stderr) != 0)
+		exit(125);	// because here STDERR is dead
+
 	// become a subreaper
 	if(getpid() != 1 && prctl(PR_SET_CHILD_SUBREAPER, 1L) != 0)
 		die_errno("failed to become a subreaper");
+
+	// TTY
+	has_tty = isatty(STDIN_FILENO) && (tcgetpgrp(STDIN_FILENO) == getpgrp());
 
 	// mask all signals
 	sigset_t sig_set, old_set;
@@ -286,9 +297,15 @@ void run(char** const cmd) {
 	sigprocmask(SIG_SETMASK, &sig_set, &old_set);
 
 	// start the process
-	cmd_pid = spawn(cmd, &old_set);
+	proc_group = spawn(cmd, &old_set);
 
-	// wait on signals
+	// close unneeded handles
+    if(!has_tty) {
+		fclose(stdout);
+		fclose(stdin);
+	}
+
+	// main loop
 	int sig;
 
 	while(sigwait(&sig_set, &sig) == 0) {
@@ -296,11 +313,16 @@ void run(char** const cmd) {
 			case SIGPIPE:
 			case SIGTTOU: // we are in the background trying terminal I/O
 			case SIGTTIN:
-				// silently ignore
+			case SIGTSTP:
+				log_info("ignored signal %s(%d)", sig2str(sig), sig);
 				break;
 
 			case SIGCHLD:
 				scan_children();
+				break;
+
+			case SIGALRM:
+				forward_signal(alarm_set ? SIGKILL : SIGALRM);
 				break;
 
 			default:
@@ -316,15 +338,17 @@ void run(char** const cmd) {
 static
 const char usage_string[] =
 "Usage:\n"
-"  run [-q] [-s SIG] cmd [args...]\n"
+"  run [-qset] cmd [args...]\n"
 "  run [-hv]\n"
 "\n"
 "Start `cmd`, then wait for it and all its descendants to complete.\n"
 "\n"
 "Options:\n"
 "  -q       Reduce logging level (may be given more than once).\n"
-"  -s SIG   Send signal SIG to all processes when the main one terminates;\n"
+"  -s SIG   Send signal SIG to all remaining processes when one terminates with an error;\n"
 "           SIG can be any of: INT, TERM, KILL, QUIT, HUP, USR1, USR2.\n"
+"  -e CODE  Minimal process exit code to be treated as an error (default: 0).\n"
+"  -t N     Wait N seconds before sending KILL signal to all remaining processes.\n"
 "  -h       Show this help and exit.\n"
 "  -v       Show version and exit.\n";
 
@@ -335,53 +359,109 @@ void usage_exit(void) {
 	exit(EXIT_FAILURE);
 }
 
+// parse integer (for command line options)
+static
+int parse_int(const char* s) {
+	int digits = 0, val = 0;
+
+	for(;; ++s) {
+		switch(*s) {
+			case 0:
+				return (digits > 0) ? val : -1;
+			case '0' ... '9':
+				val = 10 * val + (*s - '0');
+
+				if(++digits < 10)
+					continue;
+				// fall through
+			default:
+				return -1;
+		}
+	}
+}
+
 // main
 int main(int argc, char** argv) {
 	if(argc == 1)
 		usage_exit();
 
+	// parse options
 	int c;
 
-	while((c = getopt(argc, argv, "+:qhvs:")) != -1) {
+	while((c = getopt(argc, argv, "+:qhvs:t:e:")) != -1) {
 		switch(c) {
 			case 'q':
+				// log level
 				++log_level;
 				break;
 
 			case 'h':
+				// help
 				usage_exit();
 
 			case 'v':
+				// version
 				fwrite(XSTR(VER) "\n", sizeof(XSTR(VER)), 1, stderr);
 				exit(EXIT_FAILURE);
 
 			case 's': {
+				// terminating signal
 				const char* s = (optarg[0] == 'S' && optarg[1] == 'I' && optarg[2] == 'G')
 							  ? optarg + 3
 							  : optarg;
 
-				notification_signal = (strcmp(s, "INT") == 0)	? SIGINT
-									: (strcmp(s, "TERM") == 0)	? SIGTERM
-									: (strcmp(s, "KILL") == 0)	? SIGKILL
-									: (strcmp(s, "QUIT") == 0)	? SIGQUIT
-									: (strcmp(s, "HUP") == 0)	? SIGHUP
-									: (strcmp(s, "USR1") == 0)	? SIGUSR1
-									: (strcmp(s, "USR2") == 0)	? SIGUSR2
-									: 0;
+				term_signal = (strcmp(s, "INT") == 0)	? SIGINT
+							: (strcmp(s, "TERM") == 0)	? SIGTERM
+							: (strcmp(s, "KILL") == 0)	? SIGKILL
+							: (strcmp(s, "QUIT") == 0)	? SIGQUIT
+							: (strcmp(s, "HUP") == 0)	? SIGHUP
+							: (strcmp(s, "USR1") == 0)	? SIGUSR1
+							: (strcmp(s, "USR2") == 0)	? SIGUSR2
+							: 0;
 
-				if(notification_signal == 0)
+				if(term_signal == 0)
 					die("unrecognised signal name: `%s`", optarg);
 
 				break;
 			}
+
+			case 't':
+				// kill timeout
+				if((kill_timeout = parse_int(optarg)) <= 0)
+					die("invalid timeout value: `%s`", optarg);
+
+				break;
+
+			case 'e':
+				// error threshold
+				min_error = parse_int(optarg);
+
+				if(min_error < 0 || min_error > 255)
+					die("invalid error threshold: `%s`", optarg);
+
+				break;
 
 			case '?':
 				die("unrecognised option `-%c`", optopt);
 		}
 	}
 
+	// validate options
 	if(optind == argc)
 		die("missing command");
 
+	if(!term_signal) {
+		if(kill_timeout) {
+			log_warn("option `-t %d` is meaningless without `-s`", kill_timeout);
+			kill_timeout = 0;
+		}
+
+		if(min_error) {
+			log_warn("option `-e %d` is meaningless without `-s`", min_error);
+			min_error = 0;
+		}
+	}
+
+	// options ok, go ahead
 	run(&argv[optind]);
 }
