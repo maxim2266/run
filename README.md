@@ -20,18 +20,33 @@ and reduce my cloud bill by two-thirds.
 ```
 ▶ ./run -h
 Usage:
-  run [-q] [-s SIG] cmd [args...]
+  run [-qset] cmd [args...]
   run [-hv]
 
 Start `cmd`, then wait for it and all its descendants to complete.
 
 Options:
   -q       Reduce logging level (may be given more than once).
-  -s SIG   Send signal SIG to all processes when the main one terminates;
+  -s SIG   Send signal SIG to all remaining processes when one terminates with an error;
            SIG can be any of: INT, TERM, KILL, QUIT, HUP, USR1, USR2.
+  -e CODE  Minimal process exit code to be treated as an error (default: 0).
+  -t N     Wait N seconds before sending KILL signal to all remaining processes.
   -h       Show this help and exit.
   -v       Show version and exit.
 ```
+With no options `run` simply starts the given command and waits for it and all descendants
+to complete, otherwise:
+* With `-s` option it sends the given signal to the entire process group when any process
+  terminates. _Note_: Linux shells typically block INT and QUIT signals.
+* With `-e` option the above signal is sent only when a process exits with a code greater
+  or equal to the one specified.
+* With `-t` option KILL signal is sent to all the remaining processes after the specified timeout.
+
+Options `-e` and `-t` are meaningless without `-s`. In practice `-s` and `-t` are usually set
+to reflect Docker defaults: `-s SIGTERM -t 10`.
+
+Exit code from `run` is that of the first process terminated with non-zero code, or 0 if all
+completed successfully.
 
 ### Setup
 ```shell
@@ -50,8 +65,8 @@ that would be nice to have in the future:
 * Ability to launch multiple services without a shell.
 * Collect STDOUT and STDERR from each service individually, to make sure they don't share
   the same Unix pipe.
-* More flexible notifications; simply sending a signal to all processes requires each of them
-  to be ready to receive such a signal.
+* Service management, able (at least) to restart a process without shutting down the whole
+  container.
 * `setuid`, although this is likely to (massively) complicate the code.
 
 I don't know if anything of the above will ever be implemented.
