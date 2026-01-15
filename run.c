@@ -236,6 +236,11 @@ void do_exec(char** const cmd, sigset_t* const sig_set) {
 	// grab TTY, if any
 	assign_tty(getpgrp());
 
+	// send termination signal if parent is dead
+	// (doesn't help grandchildren and daemons)
+	if(prctl(PR_SET_PDEATHSIG, term_signal ? term_signal : SIGTERM) < 0)
+		log_warn_errno("pid %jd: failed to set parent death signal", (intmax_t)getpid());
+
 	// restore signal mask
 	sigprocmask(SIG_SETMASK, sig_set, NULL);
 
