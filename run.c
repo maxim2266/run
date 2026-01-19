@@ -133,7 +133,7 @@ int exit_code = 0,
 	term_signal = 0,
 	kill_timeout = 0,
 	min_error = 0,
-	alarm_set = 0;
+	terminating = 0;
 
 static
 pid_t proc_group = 0;
@@ -215,15 +215,14 @@ void scan_children(void) {
 			exit_code = status;
 
 		// notification flag
-		if(!notify && !alarm_set)
-			notify = (status >= min_error);
+		notify |= (status >= min_error);
 	}
 
-	if(notify && term_signal) {
-		// send terminating signal
+	if(notify && term_signal && !terminating) {
+		// kill process group
 		forward_signal(term_signal);
 		alarm(kill_timeout);
-		alarm_set = 1;
+		terminating = 1;
 	}
 }
 
@@ -327,7 +326,7 @@ void run(char** const cmd) {
 				break;
 
 			case SIGALRM:
-				forward_signal(alarm_set ? SIGKILL : SIGALRM);
+				forward_signal(terminating ? SIGKILL : SIGALRM);
 				break;
 
 			default:
