@@ -115,6 +115,12 @@ test_case 'auto-stop then kill' <<-EOF
 	[ \$? -eq 137 ]
 EOF
 
+test_case 'delay on termination signal' <<-EOF
+	$RUN --rm $IMAGE /bin/run -s TERM -t 1 sh -c \
+		'(trap "sleep 2 && echo Oops" TERM; sleep 5) & sleep 0.5'
+	[ \$? -eq 137 ]
+EOF
+
 test_case 'exit code ignore' <<-EOF
 	$RUN --rm $IMAGE /bin/run -s HUP -e 1 sh -c 'sleep 2 & sleep 0.5'
 EOF

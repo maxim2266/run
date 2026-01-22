@@ -206,7 +206,7 @@ void scan_children(void) {
 		} else
 			continue;
 
-		// grab TTY on main exit
+		// grab TTY on main process exit
 		if(pid == proc_group)
 			assign_tty(getpgrp());
 
@@ -218,8 +218,9 @@ void scan_children(void) {
 		notify |= (status >= min_error);
 	}
 
+	// initiate shutdown if required
 	if(notify && term_signal && !terminating) {
-		// kill process group
+		log_info("shutting down");
 		forward_signal(term_signal);
 		alarm(kill_timeout);
 		terminating = 1;
@@ -294,6 +295,9 @@ void run(char** const cmd) {
 	// TTY
 	has_tty = isatty(STDIN_FILENO) && (tcgetpgrp(STDIN_FILENO) == getpgrp());
 
+	// ignore SIGPIPE
+	signal(SIGPIPE, SIG_IGN);
+
 	// mask all signals
 	sigset_t sig_set, old_set;
 
@@ -314,11 +318,11 @@ void run(char** const cmd) {
 
 	while(sigwait(&sig_set, &sig) == 0) {
 		switch(sig) {
-			case SIGPIPE:
+			case SIGPIPE: // just in case
 			case SIGTTOU: // we are in the background trying terminal I/O
 			case SIGTTIN:
 			case SIGTSTP:
-				log_info("ignored signal %s(%d)", sig2str(sig), sig);
+				// ignore
 				break;
 
 			case SIGCHLD:
