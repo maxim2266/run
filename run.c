@@ -244,6 +244,9 @@ void do_exec(char** const cmd, sigset_t* const sig_set) {
 	// restore signal mask
 	sigprocmask(SIG_SETMASK, sig_set, NULL);
 
+	// restore SIGPIPE
+	signal(SIGPIPE, SIG_DFL);
+
 	// exec the command
 	execvp(cmd[0], cmd);
 
@@ -353,9 +356,9 @@ const char usage_string[] =
 "\n"
 "Options:\n"
 "  -q       Reduce logging level (may be given more than once).\n"
-"  -s SIG   Send signal SIG to all remaining processes when one terminates with an error;\n"
+"  -s SIG   Send signal SIG to all remaining processes when one terminates;\n"
 "           SIG can be any of: INT, TERM, KILL, QUIT, HUP, USR1, USR2.\n"
-"  -e CODE  Minimal process exit code to be treated as an error (default: 0).\n"
+"  -e CODE  Minimal process exit code to trigger the above signal (default: 0).\n"
 "  -t N     Wait N seconds before sending KILL signal to all remaining processes.\n"
 "  -h       Show this help and exit.\n"
 "  -v       Show version and exit.\n";

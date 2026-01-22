@@ -27,9 +27,9 @@ Start `cmd`, then wait for it and all its descendants to complete.
 
 Options:
   -q       Reduce logging level (may be given more than once).
-  -s SIG   Send signal SIG to all remaining processes when one terminates with an error;
+  -s SIG   Send signal SIG to all remaining processes when one terminates;
            SIG can be any of: INT, TERM, KILL, QUIT, HUP, USR1, USR2.
-  -e CODE  Minimal process exit code to be treated as an error (default: 0).
+  -e CODE  Minimal process exit code to trigger the above signal (default: 0).
   -t N     Wait N seconds before sending KILL signal to all remaining processes.
   -h       Show this help and exit.
   -v       Show version and exit.
