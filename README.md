@@ -55,6 +55,8 @@ cd run
 make image
 ```
 The last command builds an image according to the provided [dockerfile](runner.dockerfile).
+The compiled binary in the container is statically linked with `musl` library.
+
 Other targets:
 * `make test` to run all tests in a container;
 * `make` to build the program locally.
