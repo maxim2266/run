@@ -52,29 +52,25 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 static
 unsigned log_level = 0u;
 
-#define log_info(fmt, ...)	\
-do {	\
+#define log_info(fmt, ...) ({	\
 	if(log_level == 0u)	\
 		warnx("[info] " fmt __VA_OPT__(,) __VA_ARGS__);	\
-} while(0)
+})
 
-#define log_info_errno(fmt, ...)	\
-do {	\
+#define log_info_errno(fmt, ...) ({	\
 	if(log_level == 0u)	\
 		warn("[info] " fmt __VA_OPT__(,) __VA_ARGS__);	\
-} while(0)
+})
 
-#define log_warn(fmt, ...)	\
-do {	\
+#define log_warn(fmt, ...) ({	\
 	if(log_level <= 1u)	\
 		warnx("[warn] " fmt __VA_OPT__(,) __VA_ARGS__);	\
-} while(0)
+})
 
-#define log_warn_errno(fmt, ...)	\
-do {	\
+#define log_warn_errno(fmt, ...) ({	\
 	if(log_level <= 1u)	\
 		warn("[warn] " fmt __VA_OPT__(,) __VA_ARGS__);	\
-} while(0)
+})
 
 #define log_err(fmt, ...)		 warnx("[error] " fmt __VA_OPT__(,) __VA_ARGS__)
 #define log_err_errno(fmt, ...)	 warn("[error] " fmt __VA_OPT__(,) __VA_ARGS__)
@@ -85,6 +81,24 @@ do {	\
 
 // attributes
 #define NORETURN	static __attribute__((noinline,noreturn))
+
+// quit child process
+NORETURN
+void child_exit(const int code) {
+	fflush(stderr);
+	_exit((code == ENOENT) ? 127 : 126);
+}
+
+#define die_child(fmt, ...) ({	\
+	log_err("pid %jd: " fmt, (intmax_t)getpid() __VA_OPT__(,) __VA_ARGS__);	\
+	child_exit(ECANCELED);	\
+})
+
+#define die_child_errno(fmt, ...) ({	\
+	const int code = errno;	\
+	log_err_errno("pid %jd: " fmt, (intmax_t)getpid() __VA_OPT__(,) __VA_ARGS__);	\
+	child_exit(code);	\
+})
 
 // signal name mapper
 static
@@ -124,6 +138,56 @@ const char* sig2str(const int sig) {
 		case SIGWINCH:	return "SIGWINCH";
         default: 		return "<unknown>";
     }
+}
+
+// signal sets
+static
+const int ignored_signals[] = {
+	SIGPIPE,
+	SIGTTOU,
+	SIGTTIN,
+	SIGTSTP,
+	SIGIO
+};
+
+static
+const int blocked_signals[] = {
+	SIGALRM,
+	SIGCHLD,
+	SIGHUP,
+	SIGINT,
+	SIGQUIT,
+	SIGTERM,
+	SIGUSR1,
+	SIGUSR2,
+	SIGWINCH
+};
+
+// ignore signals, fill mask of blocked signals
+static
+void setup_sig_mask(sigset_t* const sig_set) {
+	// ignored signals
+	for(unsigned i = 0; i < sizeof(ignored_signals)/sizeof(ignored_signals[0]); ++i)
+		signal(ignored_signals[i], SIG_IGN);
+
+	// mask for blocked signals
+	sigemptyset(sig_set);
+
+	for(unsigned i = 0; i < sizeof(blocked_signals)/sizeof(blocked_signals[0]); ++i)
+		if(sigaddset(sig_set, blocked_signals[i]))
+			die("signal mask: failed to add signal %d", blocked_signals[i]);
+}
+
+// restore original signal handlers and unblock signals using the supplied mask
+static
+void restore_signals(sigset_t* const sig_set) {
+	// ignored signals
+	for(unsigned i = 0; i < sizeof(ignored_signals)/sizeof(ignored_signals[0]); ++i)
+		signal(ignored_signals[i], SIG_DFL);
+
+	// unblock
+	if(sigprocmask(SIG_SETMASK, sig_set, NULL))
+		die_child_errno("failed to reset signal mask");
 }
 
 // state variables
@@ -192,10 +256,10 @@ void scan_children(void) {
 		if(WIFEXITED(status)) {
 			status = WEXITSTATUS(status);
 
-			if(status == 0)
-				log_info("pid %jd: exited with code %d", (intmax_t)pid, status);
+			if(status >= min_error)
+				log_warn("pid %jd: exited with code %d", (intmax_t)pid, status);
 			else
-				log_warn("pid %jd: failed with code %d", (intmax_t)pid, status);
+				log_info("pid %jd: exited with code %d", (intmax_t)pid, status);
 
 		} else if(WIFSIGNALED(status)) {
 			const int sig = WTERMSIG(status);
@@ -241,27 +305,12 @@ void do_exec(char** const cmd, sigset_t* const sig_set) {
 	if(prctl(PR_SET_PDEATHSIG, term_signal ? term_signal : SIGTERM) < 0)
 		log_warn_errno("pid %jd: failed to set parent death signal", (intmax_t)getpid());
 
-	// restore signal mask
-	sigprocmask(SIG_SETMASK, sig_set, NULL);
-
-	// restore SIGPIPE
-	signal(SIGPIPE, SIG_DFL);
+	// signals
+	restore_signals(sig_set);
 
 	// exec the command
 	execvp(cmd[0], cmd);
-
-	// `exec` failed
-	const int code = errno;
-
-	log_err_errno("failed to exec `%s`", cmd[0]);
-	fflush(NULL);
-
-	// exit code, see https://tldp.org/LDP/abs/html/exitcodes.html#EXITCODESREF
-	switch(code) {
-		case EACCES: _exit(126);
-		case ENOENT: _exit(127);
-		default:     _exit(EXIT_FAILURE);
-	}
+	die_child_errno("failed to exec `%s`", cmd[0]);
 }
 
 // spawn a new process
@@ -298,14 +347,13 @@ void run(char** const cmd) {
 	// TTY
 	has_tty = isatty(STDIN_FILENO) && (tcgetpgrp(STDIN_FILENO) == getpgrp());
 
-	// ignore SIGPIPE
-	signal(SIGPIPE, SIG_IGN);
-
-	// mask all signals
+	// signal masks
 	sigset_t sig_set, old_set;
 
-	sigfillset(&sig_set);
-	sigprocmask(SIG_SETMASK, &sig_set, &old_set);
+	setup_sig_mask(&sig_set);
+
+	if(sigprocmask(SIG_BLOCK, &sig_set, &old_set))
+		die_errno("failed to set signal mask");
 
 	// start the process
 	proc_group = spawn(cmd, &old_set);
@@ -321,13 +369,6 @@ void run(char** const cmd) {
 
 	while(sigwait(&sig_set, &sig) == 0) {
 		switch(sig) {
-			case SIGPIPE: // just in case
-			case SIGTTOU: // we are in the background trying terminal I/O
-			case SIGTTIN:
-			case SIGTSTP:
-				// ignore
-				break;
-
 			case SIGCHLD:
 				scan_children();
 				break;
@@ -337,7 +378,8 @@ void run(char** const cmd) {
 				break;
 
 			default:
-				forward_signal(sig);
+				if(sig < SIGRTMIN)
+					forward_signal(sig);
 				break;
 		}
 	}
