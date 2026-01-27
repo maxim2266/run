@@ -130,4 +130,9 @@ test_case 'exit code trigger error' <<-EOF
 	| grep -qF 'killed by SIGHUP(1)'
 EOF
 
+test_case 'SIGALRM propagation' <<-EOF
+	$RUN --rm $IMAGE /bin/run sh -c 'sleep 2 & sleep 0.5 ; kill -ALRM 1'
+	[ \$? -eq 142 ]
+EOF
+
 log "completed $TOTAL test cases"

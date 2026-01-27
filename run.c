@@ -196,8 +196,7 @@ int exit_code = 0,
 	has_tty = 0,
 	term_signal = 0,
 	kill_timeout = 0,
-	min_error = 0,
-	terminating = 0;
+	min_error = 0;
 
 static
 pid_t proc_group = 0;
@@ -283,11 +282,11 @@ void scan_children(void) {
 	}
 
 	// initiate shutdown if required
-	if(notify && term_signal && !terminating) {
+	if(notify && term_signal) {
 		log_info("shutting down");
 		forward_signal(term_signal);
 		alarm(kill_timeout);
-		terminating = 1;
+		term_signal = 0;
 	}
 }
 
@@ -365,26 +364,29 @@ void run(char** const cmd) {
 	}
 
 	// main loop
-	int sig;
+	for(;;) {
+		siginfo_t info;
 
-	while(sigwait(&sig_set, &sig) == 0) {
-		switch(sig) {
+		while(sigwaitinfo(&sig_set, &info) < 0)
+			if(errno != EINTR)
+				die_errno("signal wait failed");
+
+		// see what we've got
+		switch(info.si_signo) {
 			case SIGCHLD:
 				scan_children();
 				break;
 
 			case SIGALRM:
-				forward_signal(terminating ? SIGKILL : SIGALRM);
+				// alarm from the kernel means we requested it
+				forward_signal(info.si_code == SI_KERNEL ? SIGKILL : SIGALRM);
 				break;
 
 			default:
-				if(sig < SIGRTMIN)
-					forward_signal(sig);
+				forward_signal(info.si_signo);
 				break;
 		}
 	}
-
-	die_errno("signal wait failed");
 }
 
 // usage string
