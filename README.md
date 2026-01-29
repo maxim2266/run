@@ -6,13 +6,13 @@
 reaping zombie processes and forwarding Unix signals to the entire process group.
 
 ### Motivation
-Years ago, when the concept of the "cloud" was just emerging, I imagined it as a collection of
-networked Linux computers, each fully set up, and with a service manager I could configure to
-run my software. It turned out I was wrong: Docker containers run only one process, and cloud
-providers essentially charge us per each process we start. Not a good state of affairs, but
-I cannot change the world. All I want is to run inside my container something as simple as:
+Years ago, when the concept of the "cloud" was just emerging, I imagined it as a collection
+of networked Linux computers, each equipped with a service manager I could configure to run
+my software. It turned out I was wrong: Docker containers run only one process, and cloud
+providers essentially charge us per each process we start. Not a good state of affairs, but I
+cannot change the world. All I want is to run inside my container something like:
 ```shell
-/bin/run sh -c 'service1 & service2 & service3 &'
+/bin/run -ds SIGTERM sh -ec 'service1 & service2 & service3 &'
 ```
 and reduce my cloud bill by two-thirds.
 
@@ -20,7 +20,7 @@ and reduce my cloud bill by two-thirds.
 ```
 ▶ ./run -h
 Usage:
-  run [-qset] cmd [args...]
+  run [-qsdt] cmd [args...]
   run [-hv]
 
 Start `cmd`, then wait for it and all its descendants to complete.
@@ -29,7 +29,8 @@ Options:
   -q       Reduce logging level (may be given more than once).
   -s SIG   Send signal SIG to all remaining processes when one terminates;
            SIG can be any of: INT, TERM, KILL, QUIT, HUP, USR1, USR2.
-  -e CODE  Minimal process exit code to trigger the above signal (default: 0).
+  -d       Daemon mode: skip sending the above termination signal when `cmd`
+           exits with code 0.
   -t N     Wait N seconds before sending KILL signal to all remaining processes.
   -h       Show this help and exit.
   -v       Show version and exit.
@@ -38,15 +39,23 @@ With no options `run` simply starts the given command and waits for it and all d
 to complete, otherwise:
 * With `-s` option it sends the given signal to the entire process group when any process
   terminates. _Note_: Linux shells typically block INT and QUIT signals.
-* With `-e` option the above signal is sent only when a process exits with a code greater
-  or equal to the one specified.
+* With `-d` option the above signal is _not_ sent when `cmd` exits with code 0. Useful where
+  `cmd` only starts the services, but doesn't wait for any of them to complete.
 * With `-t` option KILL signal is sent to all the remaining processes after the specified timeout.
 
-Options `-e` and `-t` are meaningless without `-s`. In practice `-s` and `-t` are usually set
+Options `-d` and `-t` are meaningless without `-s`. In practice `-s` and `-t` are usually set
 to reflect Docker defaults: `-s SIGTERM -t 10`.
 
-Exit code from `run` is that of the first process terminated with non-zero code, or 0 if all
-completed successfully.
+Exit code from `run` is the maximum of all exit codes, or 0 if all processes completed
+successfully.
+
+_Note_: There is a small race condition when running a command like `sh -ec 'service1 & service2 &'`:
+if `service1` starts, but then quickly terminates before `sh` exit, then the termination will not
+be detected by `run`, because at that moment `service1` is still a child process of `sh`.
+This can be fixed by simulating a double-fork:
+```shell
+sh -ec '(service1 &) ; service2 &'
+```
 
 ### Setup
 ```shell

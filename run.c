@@ -196,7 +196,7 @@ int exit_code = 0,
 	has_tty = 0,
 	term_signal = 0,
 	kill_timeout = 0,
-	min_error = 0;
+	daemon_mode = 0;
 
 static
 pid_t proc_group = 0;
@@ -249,40 +249,39 @@ void forward_signal(const int sig) {
 static
 void scan_children(void) {
 	pid_t pid;
-	int status, notify = 0;
+	int status, done = 0;
 
 	while((pid = next_proc(&status)) > 0) {
 		if(WIFEXITED(status)) {
 			status = WEXITSTATUS(status);
-
-			if(status >= min_error)
-				log_warn("pid %jd: exited with code %d", (intmax_t)pid, status);
-			else
-				log_info("pid %jd: exited with code %d", (intmax_t)pid, status);
+			log_info("pid %jd: exited with code %d", (intmax_t)pid, status);
 
 		} else if(WIFSIGNALED(status)) {
 			const int sig = WTERMSIG(status);
 
-			log_warn("pid %jd: killed by %s(%d)", (intmax_t)pid, sig2str(sig), sig);
+			log_info("pid %jd: killed by %s(%d)", (intmax_t)pid, sig2str(sig), sig);
 			status = sig + 128;
 
 		} else
 			continue;
 
-		// grab TTY on main process exit
-		if(pid == proc_group)
+		if(pid == proc_group) {
+			// main process exit
+			done |= (status || !daemon_mode);
+
+			// reacquire TTY
 			assign_tty(getpgrp());
 
-		// exit code
-		if(!exit_code)
-			exit_code = status;
+		} else
+			done = 1;
 
-		// notification flag
-		notify |= (status >= min_error);
+		// exit code
+		if(status > exit_code)
+			exit_code = status;
 	}
 
 	// initiate shutdown if required
-	if(notify && term_signal) {
+	if(done && term_signal) {
 		log_info("shutting down");
 		forward_signal(term_signal);
 		alarm(kill_timeout);
@@ -358,10 +357,10 @@ void run(char** const cmd) {
 	proc_group = spawn(cmd, &old_set);
 
 	// close unneeded handles
-    if(!has_tty) {
-		fclose(stdout);
+	fclose(stdout);
+
+	if(!has_tty)
 		fclose(stdin);
-	}
 
 	// main loop
 	for(;;) {
@@ -393,7 +392,7 @@ void run(char** const cmd) {
 static
 const char usage_string[] =
 "Usage:\n"
-"  run [-qset] cmd [args...]\n"
+"  run [-qsdt] cmd [args...]\n"
 "  run [-hv]\n"
 "\n"
 "Start `cmd`, then wait for it and all its descendants to complete.\n"
@@ -402,7 +401,8 @@ const char usage_string[] =
 "  -q       Reduce logging level (may be given more than once).\n"
 "  -s SIG   Send signal SIG to all remaining processes when one terminates;\n"
 "           SIG can be any of: INT, TERM, KILL, QUIT, HUP, USR1, USR2.\n"
-"  -e CODE  Minimal process exit code to trigger the above signal (default: 0).\n"
+"  -d       Daemon mode: skip sending the above termination signal when `cmd`\n"
+"           exits with code 0.\n"
 "  -t N     Wait N seconds before sending KILL signal to all remaining processes.\n"
 "  -h       Show this help and exit.\n"
 "  -v       Show version and exit.\n";
@@ -443,7 +443,7 @@ int main(int argc, char** argv) {
 	// parse options
 	int c;
 
-	while((c = getopt(argc, argv, "+:qhvs:t:e:")) != -1) {
+	while((c = getopt(argc, argv, "+:qhvds:t:")) != -1) {
 		switch(c) {
 			case 'q':
 				// log level
@@ -458,6 +458,11 @@ int main(int argc, char** argv) {
 				// version
 				fwrite(XSTR(VER) "\n", sizeof(XSTR(VER)), 1, stderr);
 				exit(EXIT_FAILURE);
+
+			case 'd':
+				// daemon mode
+				daemon_mode = 1;
+				break;
 
 			case 's': {
 				// terminating signal
@@ -487,15 +492,6 @@ int main(int argc, char** argv) {
 
 				break;
 
-			case 'e':
-				// error threshold
-				min_error = parse_int(optarg);
-
-				if(min_error < 0 || min_error > 255)
-					die("invalid error threshold: `%s`", optarg);
-
-				break;
-
 			case '?':
 				die("unrecognised option `-%c`", optopt);
 		}
@@ -507,13 +503,13 @@ int main(int argc, char** argv) {
 
 	if(!term_signal) {
 		if(kill_timeout) {
-			log_warn("option `-t %d` is meaningless without `-s`", kill_timeout);
+			log_warn("ignored option: `-t %d` is meaningless without `-s`", kill_timeout);
 			kill_timeout = 0;
 		}
 
-		if(min_error) {
-			log_warn("option `-e %d` is meaningless without `-s`", min_error);
-			min_error = 0;
+		if(daemon_mode) {
+			log_warn("ignored option: `-d` is meaningless without `-s`");
+			daemon_mode = 0;
 		}
 	}
 
