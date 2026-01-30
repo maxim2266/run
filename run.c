@@ -382,6 +382,9 @@ void run(char** const cmd) {
 				break;
 
 			default:
+				if(info.si_signo == term_signal)
+					term_signal = 0;
+
 				forward_signal(info.si_signo);
 				break;
 		}
@@ -437,6 +440,10 @@ int parse_int(const char* s) {
 
 // main
 int main(int argc, char** argv) {
+	// make STDERR line-buffered
+	setvbuf(stderr, NULL, _IOLBF, 0);
+
+	// check arguments
 	if(argc == 1)
 		usage_exit();
 
