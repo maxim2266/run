@@ -49,13 +49,16 @@ to reflect Docker defaults: `-s SIGTERM -t 10`.
 Exit code from `run` is the maximum of all exit codes, or 0 if all processes completed
 successfully.
 
-_Note_: There is a small race condition when running a command like `sh -ec 'service1 & service2 &'`:
-if `service1` starts, but then quickly terminates before `sh` exit, then the termination will not
-be detected by `run`, because at that moment `service1` is still a child process of `sh`.
-This can be fixed by simulating a double-fork:
+_Note_: There is a subtle issue when running a command like
+`sh -ec 'service1 & service2'` (i.e. `service1` in the background and `service2` in the foreground):
+if `service1` starts, but terminates before `service2`, then the termination will not be detected
+by `run`, because at that moment `service1` is still a child process of `sh`. This can be
+fixed by simulating a double-fork:
 ```shell
-sh -ec '(service1 &) ; service2 &'
+sh -ec '(service1 &) ; service2'
 ```
+There is no such problem if both services started in the background, and `run` is invoked in
+daemon mode.
 
 ### Setup
 ```shell
