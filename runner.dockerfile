@@ -4,5 +4,6 @@ WORKDIR	/build
 COPY	. .
 RUN		[ "make", "clean-local", "static" ]
 
-FROM	alpine:latest
-COPY	--from=builder /build/run /bin/run
+FROM		alpine:latest
+COPY		--from=builder /build/run /bin/run
+ENTRYPOINT	[ "/bin/run" ]

@@ -39,49 +39,49 @@ test_case() {
 
 # test cases
 test_case 'version' <<-EOF
-	! $RUN --rm $IMAGE /bin/run -v
+	! $RUN --rm $IMAGE -v
 EOF
 
 test_case 'simple invocation' <<-EOF
-	$RUN --rm $IMAGE /bin/run sleep 0.1
+	$RUN --rm $IMAGE sleep 0.1
 EOF
 
 test_case 'simple error propagation' <<-EOF
-	$RUN --rm $IMAGE /bin/run sh -c 'exit 42'
+	$RUN --rm $IMAGE sh -c 'exit 42'
 	[ \$? -eq 42 ]
 EOF
 
 test_case 'invalid command' <<-EOF
-    ! $RUN --rm $IMAGE /bin/run nonexistent-command
+    ! $RUN --rm $IMAGE nonexistent-command
 EOF
 
 test_case 'recursive error propagation' <<-EOF
-	$RUN --rm $IMAGE /bin/run /bin/run /bin/run sh -c 'exit 42'
+	$RUN --rm $IMAGE /bin/run /bin/run sh -c 'exit 42'
 	[ \$? -eq 42 ]
 EOF
 
 test_case 'two processes, normal mode' <<-EOF
-	$RUN --rm $IMAGE /bin/run -s TERM sh -ec 'sleep 0.2 & sleep 0.1'
+	$RUN --rm $IMAGE -s TERM sh -ec 'sleep 0.2 & sleep 0.1'
 	[ \$? -eq 143 ]
 EOF
 
 test_case 'two processes, daemon mode' <<-EOF
-	$RUN --rm $IMAGE /bin/run -ds TERM sh -ec 'sleep 0.2 & sleep 0.1'
+	$RUN --rm $IMAGE -ds TERM sh -ec 'sleep 0.2 & sleep 0.1'
 EOF
 
 test_case 'two processes, daemon mode, with shell error' <<-EOF
-	$RUN --rm $IMAGE /bin/run -ds TERM sh -ec 'sleep 0.2 & sleep 0.1 ; exit 42'
+	$RUN --rm $IMAGE -ds TERM sh -ec 'sleep 0.2 & sleep 0.1 ; exit 42'
 	[ \$? -eq 143 ]
 EOF
 
 test_case 'two processes, daemon mode, with daemon error' <<-EOF
-	$RUN --rm $IMAGE /bin/run -ds TERM sh -ec '( ! sleep 0.1 & ) ; sleep 0.5'
+	$RUN --rm $IMAGE -ds TERM sh -ec '( ! sleep 0.1 & ) ; sleep 0.5'
 	[ \$? -eq 143 ]
 EOF
 
 test_case 'docker stop' <<-EOF
 	set -e
-	CID=\$($RUN -d $IMAGE /bin/run -s HUP sh -ec 'trap '\''echo Stopping'\'' TERM; sleep 1 ; exit 42')
+	CID=\$($RUN -d $IMAGE -s HUP sh -ec 'trap '\''echo Stopping'\'' TERM; sleep 1 ; exit 42')
 	trap 'docker rm -f "\$CID" >/dev/null' EXIT
 	sleep 0.2
 	docker stop -t 3 "\$CID" >/dev/null
@@ -91,21 +91,21 @@ test_case 'docker stop' <<-EOF
 EOF
 
 test_case 'STDIN handling' <<-EOF
-    echo 'hello world' | $RUN --rm -i $IMAGE /bin/run cat | grep -q 'hello world'
+    echo 'hello world' | $RUN --rm -i $IMAGE cat | grep -q 'hello world'
 EOF
 
 test_case 'auto-stop' <<-EOF
-	$RUN --rm $IMAGE /bin/run -s HUP sh -ec 'sleep 1 & sleep 0.5'
+	$RUN --rm $IMAGE -s HUP sh -ec 'sleep 1 & sleep 0.5'
 	[ \$? -eq 129 ]
 EOF
 
 test_case 'auto-stop then kill' <<-EOF
-	$RUN --rm $IMAGE /bin/run -s HUP -t 1 sh -ec 'nohup sleep 2 & sleep 0.5'
+	$RUN --rm $IMAGE -s HUP -t 1 sh -ec 'nohup sleep 2 & sleep 0.5'
 	[ \$? -eq 137 ]
 EOF
 
 test_case 'SIGALRM propagation' <<-EOF
-	$RUN --rm $IMAGE /bin/run sh -ec 'sleep 2 & sleep 0.5 ; kill -ALRM 1'
+	$RUN --rm $IMAGE sh -ec 'sleep 2 & sleep 0.5 ; kill -ALRM 1'
 	[ \$? -eq 142 ]
 EOF
 
