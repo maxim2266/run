@@ -66,7 +66,7 @@ git clone https://github.com/maxim2266/run.git
 cd run
 make image
 ```
-The last command builds an image according to the provided [dockerfile](runner.dockerfile).
+The last command builds an image according to the provided [dockerfile](run.dockerfile).
 The compiled binary in the container is statically linked with `musl` library.
 
 Other targets:
@@ -76,7 +76,6 @@ Other targets:
 ### Further Development
 At the moment the program does the intended job reasonably well, but there are other features
 that would be nice to have in the future:
-* Ability to launch multiple services without a shell.
 * Collect STDOUT and STDERR from each service individually, to make sure they don't share
   the same Unix pipe.
 * Service management, able (at least) to restart a process without shutting down the whole

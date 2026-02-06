@@ -37,8 +37,14 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <signal.h>
 #include <errno.h>
 #include <unistd.h>
-#include <sys/prctl.h>
 #include <err.h>
+#include <sys/prctl.h>
+
+// max. number of processes to start
+#ifndef RUN_MAX_PROCS
+// we are not systemd, and this should be enough for all ;)
+#define RUN_MAX_PROCS 32
+#endif
 
 #ifndef VER
 #error "program version constant is not defined"
@@ -140,16 +146,7 @@ const char* sig2str(const int sig) {
     }
 }
 
-// signal sets
-static
-const int ignored_signals[] = {
-	SIGPIPE,
-	SIGTTOU,
-	SIGTTIN,
-	SIGTSTP,
-	SIGIO
-};
-
+// signal set
 static
 const int blocked_signals[] = {
 	SIGALRM,
@@ -159,16 +156,16 @@ const int blocked_signals[] = {
 	SIGQUIT,
 	SIGTERM,
 	SIGUSR1,
-	SIGUSR2,
-	SIGWINCH
+	SIGUSR2
 };
 
 // ignore signals, fill mask of blocked signals
 static
-void setup_sig_mask(sigset_t* const sig_set) {
-	// ignored signals
-	for(unsigned i = 0; i < sizeof(ignored_signals)/sizeof(ignored_signals[0]); ++i)
-		signal(ignored_signals[i], SIG_IGN);
+void setup_signals(sigset_t* const sig_set) {
+	// signals to ignore
+	signal(SIGTTOU, SIG_IGN);
+	signal(SIGTTIN, SIG_IGN);
+	signal(SIGTSTP, SIG_IGN);
 
 	// mask for blocked signals
 	sigemptyset(sig_set);
@@ -178,35 +175,18 @@ void setup_sig_mask(sigset_t* const sig_set) {
 			die("signal mask: failed to add signal %d", blocked_signals[i]);
 }
 
-// restore original signal handlers and unblock signals using the supplied mask
-static
-void restore_signals(sigset_t* const sig_set) {
-	// ignored signals
-	for(unsigned i = 0; i < sizeof(ignored_signals)/sizeof(ignored_signals[0]); ++i)
-		signal(ignored_signals[i], SIG_DFL);
-
-	// unblock
-	if(sigprocmask(SIG_SETMASK, sig_set, NULL))
-		die_child_errno("failed to reset signal mask");
-}
-
 // state variables
 static
 int exit_code = 0,
-	has_tty = 0,
 	term_signal = 0,
-	kill_timeout = 0,
-	daemon_mode = 0;
+	kill_timeout = 0;
+
+// process list
+static
+pid_t procs[RUN_MAX_PROCS];
 
 static
-pid_t proc_group = 0;
-
-// TTY assignment
-static
-void assign_tty(const pid_t pgid) {
-	if(has_tty && tcsetpgrp(STDIN_FILENO, pgid))
-		log_warn_errno("failed to assign TTY to process group %jd", (intmax_t)pgid);
-}
+unsigned num_procs = 0;
 
 // get `pid` of any sub-process that has changed its status
 static
@@ -236,14 +216,17 @@ pid_t next_proc(int* const status) { //-> pid, or 0 when scan is complete
 
 // signal forwarding
 static
-void forward_signal(const int sig) {
-	if(kill(-proc_group, sig) == 0)
-		log_info("signal %s(%d) sent to group %jd",
-				 sig2str(sig), sig, (intmax_t)proc_group);
-	else
-		log_warn_errno("signal %s(%d) could not be sent to group %jd",
-					   sig2str(sig), sig, (intmax_t)proc_group);
+void broadcast_signal(const int sig, const char* const prefix) {
+	log_info("%s %s(%d)", prefix, sig2str(sig), sig);
+
+	for(unsigned i = 0; i < num_procs; ++i)
+		if(kill(procs[i], sig) && errno != ESRCH)
+			log_warn_errno("signal %s(%d) could not be sent to process %jd",
+						   sig2str(sig), sig, (intmax_t)procs[i]);
 }
+
+#define forward_signal(sig)	broadcast_signal((sig), "forwarding")
+#define send_signal(sig)	broadcast_signal((sig), "sending")
 
 // scan all children and handle their status changes
 static
@@ -257,58 +240,47 @@ void scan_children(void) {
 			log_info("pid %jd: exited with code %d", (intmax_t)pid, status);
 
 		} else if(WIFSIGNALED(status)) {
-			const int sig = WTERMSIG(status);
-
-			log_info("pid %jd: killed by %s(%d)", (intmax_t)pid, sig2str(sig), sig);
-			status = sig + 128;
+			status = WTERMSIG(status);
+			log_info("pid %jd: killed by %s(%d)", (intmax_t)pid, sig2str(status), status);
+			status += 128;
 
 		} else
 			continue;
 
-		if(pid == proc_group) {
-			// main process exit
-			done |= (status || !daemon_mode);
+		// find process
+		unsigned i;
 
-			// reacquire TTY
-			assign_tty(getpgrp());
+		for(i = 0; i < num_procs && procs[i] != pid; ++i);
 
-		} else
+		if(i < num_procs) {
+			// remove process from the list
+			if(i < --num_procs)
+				procs[i] = procs[num_procs];
+
+			// exit code
+			if(exit_code == 0)
+				exit_code = status;
+
+			// mark the occasion
 			done = 1;
-
-		// exit code
-		if(status > exit_code)
-			exit_code = status;
+		}
 	}
 
-	// initiate shutdown if required
+	if(num_procs == 0) {
+		// exit and let the daemons die
+		log_info("exit code %d (ignoring daemons)", exit_code);
+		exit(exit_code);
+	}
+
+	// signalling
 	if(done && term_signal) {
-		log_info("shutting down");
-		forward_signal(term_signal);
-		alarm(kill_timeout);
-		term_signal = 0;
+		send_signal(term_signal);
+
+		if(kill_timeout) {
+			alarm(kill_timeout);
+			term_signal = 0; // don't send term_signal again and wait for SIGALRM
+		}
 	}
-}
-
-// exec the given command
-NORETURN
-void do_exec(char** const cmd, sigset_t* const sig_set) {
-	// create new process group
-	setpgid(0, 0);
-
-	// grab TTY, if any
-	assign_tty(getpgrp());
-
-	// send termination signal if parent is dead
-	// (doesn't help grandchildren and daemons)
-	if(prctl(PR_SET_PDEATHSIG, term_signal ? term_signal : SIGTERM) < 0)
-		log_warn_errno("pid %jd: failed to set parent death signal", (intmax_t)getpid());
-
-	// signals
-	restore_signals(sig_set);
-
-	// exec the command
-	execvp(cmd[0], cmd);
-	die_child_errno("failed to exec `%s`", cmd[0]);
 }
 
 // spawn a new process
@@ -320,47 +292,145 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set) {
 	if(pid < 0)
 		die_errno("failed to start process `%s`", cmd[0]);
 
-	// child process
-	if(pid == 0)
-		do_exec(cmd, sig_set);	// never returns
+	if(pid == 0) {
+		// child process
+		if(setsid() < 0)
+			die_child_errno("failed to create new session");
+
+		if(getppid() != 1 && prctl(PR_SET_PDEATHSIG, SIGTERM) < 0)
+			die_child_errno("failed to set parent death signal");
+
+		if(sigprocmask(SIG_SETMASK, sig_set, NULL))
+			die_child_errno("failed to reset signal mask");
+
+		signal(SIGPIPE, SIG_DFL);
+		execv(cmd[0], cmd);
+		die_child_errno("failed to exec `%s`", cmd[0]);
+	}
 
 	// parent process
-	setpgid(pid, pid);
 	log_info("pid %jd: command `%s`", (intmax_t)pid, cmd[0]);
-
 	return pid;
 }
 
-// start the command and wait on it to complete
-NORETURN
-void run(char** const cmd) {
-	// flush STDERR, as it may be buffered
-	if(fflush(stderr) != 0)
-		exit(125);	// because here STDERR is dead
+// command splitting
+typedef struct {
+	unsigned argc, cap;
+	char**	 argv;
+} command;
+
+static
+void cmd_clear(command* const cmd) {
+	for(size_t i = 0; i < cmd->argc; ++i)
+		free(cmd->argv[i]);
+
+	free(cmd->argv);
+}
+
+#define CMD_CAP 8
+
+static
+void cmd_add_string(command* const cmd, const char* const str, const size_t len) {
+	if(cmd->argc == cmd->cap) {
+		cmd->cap = cmd->cap ? (2 * cmd->cap) : CMD_CAP;
+		cmd->argv = realloc(cmd->argv, cmd->cap * sizeof(*cmd->argv));
+	}
+
+	if(str)
+		(cmd->argv[cmd->argc++] = memcpy(malloc(len + 1), str, len))[len] = 0;
+	else
+		cmd->argv[cmd->argc] = NULL; // terminating NULL does not count
+}
+
+static
+const char* cmd_split(command* const cmd, const char* p) {
+	if(!p)
+		return "empty command";
+
+	for(;;) {
+		const char* token;
+
+		p += strspn(p, " \t\r\n");
+
+		switch(*p) {
+			case 0:
+				// end of string
+				cmd_add_string(cmd, NULL, 0);
+				return cmd->argc ? NULL : "empty command";
+
+			case '"':
+			case '\'':
+				// quoted string
+				token = ++p;
+
+				if((p = strchr(token, token[-1])) == NULL)
+					return "missing closing quote";
+
+				cmd_add_string(cmd, token, p++ - token);
+				break;
+
+			default:
+				// unquoted word
+				p += strcspn((token = p), " \t\r\n");
+				cmd_add_string(cmd, token, p - token);
+				break;
+		}
+
+		// just a reality check
+		if(cmd->argc == (CMD_CAP * 32)) {
+			cmd_clear(cmd);
+			return "too many words";
+		}
+	}
+}
+
+// parse and start all commands
+static
+void spawn_procs(char** const cmds, const unsigned nproc, sigset_t* const sig_set) {
+	// parse commands
+	command* const parsed = calloc(nproc, sizeof(command));
+	const char* ret;
+
+	for(unsigned i = 0; i < nproc; ++i)
+		if((ret = cmd_split(&parsed[i], cmds[i])) != NULL)
+			die("command #%u: %s", i + 1, ret);
 
 	// become a subreaper
 	if(getpid() != 1 && prctl(PR_SET_CHILD_SUBREAPER, 1L) != 0)
 		die_errno("failed to become a subreaper");
 
-	// TTY
-	has_tty = isatty(STDIN_FILENO) && (tcgetpgrp(STDIN_FILENO) == getpgrp());
+	// signals
+	sigset_t old_set;
 
-	// signal masks
-	sigset_t sig_set, old_set;
+	setup_signals(sig_set);
 
-	setup_sig_mask(&sig_set);
-
-	if(sigprocmask(SIG_BLOCK, &sig_set, &old_set))
+	if(sigprocmask(SIG_BLOCK, sig_set, &old_set))
 		die_errno("failed to set signal mask");
 
-	// start the process
-	proc_group = spawn(cmd, &old_set);
+	// start processes
+	fflush(stderr);
+
+	for(unsigned i = 0; i < nproc; ++i) {
+		procs[num_procs++] = spawn(parsed[i].argv, &old_set);
+		cmd_clear(&parsed[i]);
+	}
+
+	free(parsed);
+}
+
+// start all commands and wait for them to complete
+NORETURN
+void run(char** const cmds, const unsigned nproc) {
+	log_info("running as pid %jd", (intmax_t)getpid());
+
+	// parse commands and start processes
+	sigset_t sig_set;
+
+	spawn_procs(cmds, nproc, &sig_set);
 
 	// close unneeded handles
 	fclose(stdout);
-
-	if(!has_tty)
-		fclose(stdin);
+	fclose(stdin);
 
 	// main loop
 	for(;;) {
@@ -377,14 +447,11 @@ void run(char** const cmd) {
 				break;
 
 			case SIGALRM:
-				// alarm from the kernel means we requested it
-				forward_signal(info.si_code == SI_KERNEL ? SIGKILL : SIGALRM);
+				if(info.si_code == SI_KERNEL) // alarm from the kernel means we requested it
+					send_signal(SIGKILL);
 				break;
 
 			default:
-				if(info.si_signo == term_signal)
-					term_signal = 0;
-
 				forward_signal(info.si_signo);
 				break;
 		}
@@ -395,17 +462,15 @@ void run(char** const cmd) {
 static
 const char usage_string[] =
 "Usage:\n"
-"  run [-qsdt] cmd [args...]\n"
+"  run [-qst] cmd [cmd...]\n"
 "  run [-hv]\n"
 "\n"
-"Start `cmd`, then wait for it and all its descendants to complete.\n"
+"Start all commands, then wait for them to complete.\n"
 "\n"
 "Options:\n"
 "  -q       Reduce logging level (may be given more than once).\n"
 "  -s SIG   Send signal SIG to all remaining processes when one terminates;\n"
 "           SIG can be any of: INT, TERM, KILL, QUIT, HUP, USR1, USR2.\n"
-"  -d       Daemon mode: skip sending the above termination signal when `cmd`\n"
-"           exits with code 0.\n"
 "  -t N     Wait N seconds before sending KILL signal to all remaining processes.\n"
 "  -h       Show this help and exit.\n"
 "  -v       Show version and exit.\n";
@@ -440,6 +505,8 @@ int parse_int(const char* s) {
 
 // main
 int main(int argc, char** argv) {
+	signal(SIGPIPE, SIG_IGN);
+
 	// make STDERR line-buffered
 	setvbuf(stderr, NULL, _IOLBF, 0);
 
@@ -450,7 +517,7 @@ int main(int argc, char** argv) {
 	// parse options
 	int c;
 
-	while((c = getopt(argc, argv, "+:qhvds:t:")) != -1) {
+	while((c = getopt(argc, argv, "+:qhvs:t:")) != -1) {
 		switch(c) {
 			case 'q':
 				// log level
@@ -465,11 +532,6 @@ int main(int argc, char** argv) {
 				// version
 				fwrite(XSTR(VER) "\n", sizeof(XSTR(VER)), 1, stderr);
 				exit(EXIT_FAILURE);
-
-			case 'd':
-				// daemon mode
-				daemon_mode = 1;
-				break;
 
 			case 's': {
 				// terminating signal
@@ -505,21 +567,19 @@ int main(int argc, char** argv) {
 	}
 
 	// validate options
-	if(optind == argc)
+	if(optind >= argc)
 		die("missing command");
 
-	if(!term_signal) {
-		if(kill_timeout) {
-			log_warn("ignored option: `-t %d` is meaningless without `-s`", kill_timeout);
-			kill_timeout = 0;
-		}
+	const unsigned nproc = argc - optind;
 
-		if(daemon_mode) {
-			log_warn("ignored option: `-d` is meaningless without `-s`");
-			daemon_mode = 0;
-		}
+	if(nproc > RUN_MAX_PROCS)
+		die("too many commands");
+
+	if(kill_timeout && !term_signal) {
+		log_warn("option `-t` is meaningless without `-s`; ignored");
+		kill_timeout = 0;
 	}
 
 	// options ok, go ahead
-	run(&argv[optind]);
+	run(&argv[optind], nproc);
 }

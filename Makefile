@@ -19,8 +19,8 @@ static: CFLAGS := -static $(CFLAGS)
 static: $(BIN)
 
 # docker image
-DOCKERFILE := runner.dockerfile
-IMAGE      := runner-image
+DOCKERFILE := $(BIN).dockerfile
+IMAGE      := $(BIN)-image
 
 image:
 	docker build -f $(DOCKERFILE) -t $(IMAGE) .

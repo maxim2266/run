@@ -21,6 +21,7 @@ cleanup() {
     log "cleaning up..."
 	IDS="$(docker ps -aqf "ancestor=$IMAGE")"
 	[ -z "$IDS" ] || docker rm -f "$IDS"
+	docker rmi -f "$IMAGE"
 	log "all done."
 }
 
@@ -43,11 +44,11 @@ test_case 'version' <<-EOF
 EOF
 
 test_case 'simple invocation' <<-EOF
-	$RUN --rm $IMAGE sleep 0.1
+	$RUN --rm $IMAGE '/bin/sleep 0.1'
 EOF
 
 test_case 'simple error propagation' <<-EOF
-	$RUN --rm $IMAGE sh -c 'exit 42'
+	$RUN --rm $IMAGE '/bin/sh -c "exit 42"'
 	[ \$? -eq 42 ]
 EOF
 
@@ -55,58 +56,33 @@ test_case 'invalid command' <<-EOF
     ! $RUN --rm $IMAGE nonexistent-command
 EOF
 
-test_case 'recursive error propagation' <<-EOF
-	$RUN --rm $IMAGE /bin/run /bin/run sh -c 'exit 42'
-	[ \$? -eq 42 ]
+test_case 'two processes' <<-EOF
+	$RUN --rm $IMAGE '/bin/sleep 0.2' '/bin/sleep 0.1'
 EOF
 
-test_case 'two processes, normal mode' <<-EOF
-	$RUN --rm $IMAGE -s TERM sh -ec 'sleep 0.2 & sleep 0.1'
-	[ \$? -eq 143 ]
+test_case 'two processes, SIGHUP' <<-EOF
+	$RUN --rm $IMAGE -s HUP '/bin/sleep 0.1' '/bin/sleep 0.2'
+	[ \$? -eq 129 ]
 EOF
 
-test_case 'two processes, daemon mode' <<-EOF
-	$RUN --rm $IMAGE -ds TERM sh -ec 'sleep 0.2 & sleep 0.1'
-EOF
-
-test_case 'two processes, daemon mode, with shell error' <<-EOF
-	$RUN --rm $IMAGE -ds TERM sh -ec 'sleep 0.2 & sleep 0.1 ; exit 42'
-	[ \$? -eq 143 ]
-EOF
-
-test_case 'two processes, daemon mode, with daemon error' <<-EOF
-	$RUN --rm $IMAGE -ds TERM sh -ec '( ! sleep 0.1 & ) ; sleep 0.5'
-	[ \$? -eq 143 ]
+test_case 'two processes, SIGHUP ignored' <<-EOF
+	$RUN --rm $IMAGE -s HUP -t 1 '/bin/sleep 0.1' '/usr/bin/nohup /bin/sleep 2'
+	[ \$? -eq 137 ]
 EOF
 
 test_case 'docker stop' <<-EOF
 	set -e
-	CID=\$($RUN -d $IMAGE -s HUP sh -ec 'trap '\''echo Stopping'\'' TERM; sleep 1 ; exit 42')
+	CID=\$($RUN -d $IMAGE -s HUP '/bin/sleep 1' '/bin/sleep 2')
 	trap 'docker rm -f "\$CID" >/dev/null' EXIT
 	sleep 0.2
-	docker stop -t 3 "\$CID" >/dev/null
+	docker stop "\$CID" >/dev/null
 	RET="\$(docker wait "\$CID")"
 	[ \$RET -eq 143 ]
-    docker logs "\$CID" | grep -q 'Stopping'
+	docker logs "\$CID"
 EOF
 
 test_case 'STDIN handling' <<-EOF
-    echo 'hello world' | $RUN --rm -i $IMAGE cat | grep -q 'hello world'
-EOF
-
-test_case 'auto-stop' <<-EOF
-	$RUN --rm $IMAGE -s HUP sh -ec 'sleep 1 & sleep 0.5'
-	[ \$? -eq 129 ]
-EOF
-
-test_case 'auto-stop then kill' <<-EOF
-	$RUN --rm $IMAGE -s HUP -t 1 sh -ec 'nohup sleep 2 & sleep 0.5'
-	[ \$? -eq 137 ]
-EOF
-
-test_case 'SIGALRM propagation' <<-EOF
-	$RUN --rm $IMAGE sh -ec 'sleep 2 & sleep 0.5 ; kill -ALRM 1'
-	[ \$? -eq 142 ]
+    echo 'ZZZ' | $RUN --rm -i $IMAGE -s TERM /bin/cat | grep -q 'ZZZ'
 EOF
 
 log "completed $TOTAL test cases"
