@@ -486,21 +486,34 @@ void usage_exit(void) {
 	exit(EXIT_FAILURE);
 }
 
-// parse integer (for command line options)
+// parse positive integer
 static
-int parse_int(const char* s) {
-	int digits = 0, val = 0;
+int parse_positive_int(const char* s) {
+	int val;
 
-	for(;; ++s) {
+	switch(*s) {
+		case '1' ... '9':
+			val = *s - '0';
+			break;
+
+		default:
+			return -1;
+	}
+
+	for(++s; ; ++s) {
 		switch(*s) {
 			case 0:
-				return (digits > 0) ? val : -1;
-			case '0' ... '9':
-				val = 10 * val + (*s - '0');
+				return val;
 
-				if(++digits < 10)
-					continue;
-				// fall through
+			case '0' ... '9':
+				if(__builtin_smul_overflow(val, 10, &val))
+					return -1;
+
+				if(__builtin_sadd_overflow(val, *s - '0', &val))
+					return -1;
+
+				break;
+
 			default:
 				return -1;
 		}
@@ -560,7 +573,7 @@ int main(int argc, char** argv) {
 
 			case 't':
 				// kill timeout
-				if((kill_timeout = parse_int(optarg)) <= 0)
+				if((kill_timeout = parse_positive_int(optarg)) <= 0)
 					die("invalid timeout value: `%s`", optarg);
 
 				break;
