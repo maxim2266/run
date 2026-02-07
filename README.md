@@ -1,18 +1,18 @@
-## `run`: A minimal `pid 1` process for Docker containers.
+## `run`: A minimalist process launcher and monitor for Docker containers.
 
 [![License: BSD 3 Clause](https://img.shields.io/badge/License-BSD_3--Clause-yellow.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
-`run` spawns a single child process, then waits for it and _all descendants_ to complete, while
-reaping zombie processes and forwarding Unix signals to the entire process group.
+`run` launches one or more commands, and then waits for all of them to complete, with
+options to either notify or terminate remaining processes when one exits.
 
 ### Motivation
 Years ago, when the concept of the "cloud" was just emerging, I imagined it as a collection
 of networked Linux computers, each equipped with a service manager I could configure to run
 my software. It turned out I was wrong: Docker containers run only one process, and cloud
 providers essentially charge us per each process we start. Not a good state of affairs, but I
-cannot change the world. All I want is to run inside my container something like:
-```shell
-/bin/run -ds SIGTERM sh -ec 'service1 & service2 & service3 &'
+cannot change the world. All I want is to add to my Dockerfile something like:
+```docker
+CMD [ "/bin/run", "-s", "SIGTERM", "/bin/service1", "/bin/service2", "/bin/service3" ]
 ```
 and reduce my cloud bill by two-thirds.
 
@@ -20,45 +20,52 @@ and reduce my cloud bill by two-thirds.
 ```
 ▶ ./run -h
 Usage:
-  run [-qsdt] cmd [args...]
+  run [-qst] cmd [cmd...]
   run [-hv]
 
-Start `cmd`, then wait for it and all its descendants to complete.
+Start all commands, then wait for them to complete.
 
 Options:
   -q       Reduce logging level (may be given more than once).
   -s SIG   Send signal SIG to all remaining processes when one terminates;
            SIG can be any of: INT, TERM, KILL, QUIT, HUP, USR1, USR2.
-  -d       Daemon mode: skip sending the above termination signal when `cmd`
-           exits with code 0.
   -t N     Wait N seconds before sending KILL signal to all remaining processes.
   -h       Show this help and exit.
   -v       Show version and exit.
 ```
-With no options `run` simply starts the given command and waits for it and all descendants
+
+With no options `run` simply starts the given commands and waits for all of them
 to complete, otherwise:
-* With `-s` option it sends the given signal to the entire process group when any process
-  terminates. _Note_: Linux shells typically block INT and QUIT signals.
-* With `-d` option the above signal is _not_ sent when `cmd` exits with code 0. Useful where
-  `cmd` only starts the services, but doesn't wait for any of them to complete.
-* With `-t` option KILL signal is sent to all the remaining processes after the specified timeout.
+* With `-s` option it sends the given Unix signal to all remaining processes each time one
+  terminates, subject to SIGCHLD coalescing. _Note_: Linux shells typically block SIGINT and
+  SIGQUIT signals.
+* With both `-s` and `-t` options the given signal is sent only once upon the first process
+  exit, followed by SIGKILL after the specified timeout.
 
-Options `-d` and `-t` are meaningless without `-s`. In practice `-s` and `-t` are usually set
-to reflect Docker defaults: `-s SIGTERM -t 10`.
+Option `-t` is meaningless without `-s`. In practice, if both `-s` and `-t` are specified,
+they are usually set to reflect Docker defaults: `-s TERM -t 10`.
 
-Exit code from `run` is the maximum of all exit codes, or 0 if all processes completed
+Exit code from `run` is the first non-zero exit code from any process, or 0 if all completed
 successfully.
 
-_Note_: There is a subtle issue when running a command like
-`sh -ec 'service1 & service2'` (i.e. `service1` in the background and `service2` in the foreground):
-if `service1` starts, but terminates before `service2`, then the termination will not be detected
-by `run`, because at that moment `service1` is still a child process of `sh`. This can be
-fixed by simulating a double-fork:
-```shell
-sh -ec '(service1 &) ; service2'
+Since only one `CMD` statement is meaningful in a Dockerfile, each command has to be supplied
+as a single string, with arguments separated by spaces or tabs. Quoting with either `"` or `'`
+is honored, but no shell-like substitution is made. All pathnames should be given in full,
+as no search on the `$PATH` is performed. Example:
+```docker
+CMD [ "/bin/run", "/bin/echo \"I am the first\"", "/bin/echo 'I am the second'" ]
 ```
-There is no such problem if both services started in the background, and `run` is invoked in
-daemon mode.
+Running a container with this command gives the following output:
+```
+run: [info] running as pid 1
+run: [info] pid 2: command `/bin/echo`
+run: [info] pid 3: command `/bin/echo`
+I am the first
+I am the second
+run: [info] pid 2: exited with code 0
+run: [info] pid 3: exited with code 0
+run: [info] exit code 0
+```
 
 ### Setup
 ```shell
@@ -66,8 +73,9 @@ git clone https://github.com/maxim2266/run.git
 cd run
 make image
 ```
-The last command builds an image according to the provided [dockerfile](run.dockerfile).
-The compiled binary in the container is statically linked with `musl` library.
+The last command builds an image according to the example [Dockerfile](run.dockerfile). The
+compiled binary in the container is statically linked with `musl` library and can be used
+in `scratch` containers.
 
 Other targets:
 * `make test` to run all tests in a container;
@@ -78,8 +86,8 @@ At the moment the program does the intended job reasonably well, but there are o
 that would be nice to have in the future:
 * Collect STDOUT and STDERR from each service individually, to make sure they don't share
   the same Unix pipe.
-* Service management, able (at least) to restart a process without shutting down the whole
-  container.
+* More advanced service management, able (at least) to restart a process without shutting down
+  the whole container.
 * `setuid`, although this is likely to (massively) complicate the code.
 
 I don't know if anything of the above will ever be implemented.
