@@ -297,12 +297,8 @@ pid_t spawn(char** const cmd, sigset_t* const sig_set) {
 		if(setsid() < 0)
 			die_child_errno("failed to create new session");
 
-		if(getppid() != 1) {
-			const int sig = (term_signal && kill_timeout) ? term_signal : SIGTERM;
-
-			if(prctl(PR_SET_PDEATHSIG, sig) < 0)
-				die_child_errno("failed to set parent death signal");
-		}
+		if(getppid() != 1 && prctl(PR_SET_PDEATHSIG, SIGTERM) < 0)
+			die_child_errno("failed to set parent death signal");
 
 		if(sigprocmask(SIG_SETMASK, sig_set, NULL))
 			die_child_errno("failed to reset signal mask");
