@@ -85,4 +85,9 @@ test_case 'STDIN handling' <<-EOF
     echo 'ZZZ' | $RUN --rm -i $IMAGE -s TERM /bin/cat | grep -q 'ZZZ'
 EOF
 
+test_case 'with daemon' <<-EOF
+	$RUN --rm $IMAGE '/bin/sleep 0.1' '/bin/sh -c '\''sleep 1 &'\' 2>&1 \
+	| grep '\(ignoring daemons\)'
+EOF
+
 log "completed $TOTAL test cases"

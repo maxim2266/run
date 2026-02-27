@@ -576,6 +576,9 @@ int main(int argc, char** argv) {
 				if((kill_timeout = parse_positive_int(optarg)) <= 0)
 					die("invalid timeout value: `%s`", optarg);
 
+				if(kill_timeout > 60 * 60)
+					die("timeout value of %d seconds is unreasonably high", kill_timeout);
+
 				break;
 
 			case '?':
