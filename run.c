@@ -179,7 +179,8 @@ void setup_signals(sigset_t* const sig_set) {
 static
 int exit_code = 0,
 	term_signal = 0,
-	kill_timeout = 0;
+	kill_timeout = 0,
+	group_kill = 0;
 
 // process list
 static
@@ -220,9 +221,9 @@ void broadcast_signal(const int sig, const char* const prefix) {
 	log_info("%s %s(%d)", prefix, sig2str(sig), sig);
 
 	for(unsigned i = 0; i < num_procs; ++i)
-		if(kill(procs[i], sig) && errno != ESRCH)
-			log_warn_errno("signal %s(%d) could not be sent to process %jd",
-						   sig2str(sig), sig, (intmax_t)procs[i]);
+		if(kill(group_kill ? -procs[i] : procs[i], sig) && errno != ESRCH)
+			log_warn_errno("signal %s(%d) could not be sent to process %s%jd",
+						   sig2str(sig), sig, group_kill ? "group " : "", (intmax_t)procs[i]);
 }
 
 #define forward_signal(sig)	broadcast_signal((sig), "forwarding")
@@ -462,7 +463,7 @@ void run(char** const cmds, const unsigned nproc) {
 static
 const char usage_string[] =
 "Usage:\n"
-"  run [-qst] cmd [cmd...]\n"
+"  run [-qstg] cmd [cmd...]\n"
 "  run [-hv]\n"
 "\n"
 "Start all commands, then wait for them to complete.\n"
@@ -472,6 +473,7 @@ const char usage_string[] =
 "  -s SIG   Send signal SIG to all remaining processes when one terminates;\n"
 "           SIG can be any of: INT, TERM, KILL, QUIT, HUP, USR1, USR2.\n"
 "  -t N     Wait N seconds before sending KILL signal to all remaining processes.\n"
+"  -g       Forward signals to the process group of each launched command.\n"
 "  -h       Show this help and exit.\n"
 "  -v       Show version and exit.\n";
 
@@ -530,7 +532,7 @@ int main(int argc, char** argv) {
 	// parse options
 	int c;
 
-	while((c = getopt(argc, argv, "+:qhvs:t:")) != -1) {
+	while((c = getopt(argc, argv, "+:qhvgs:t:")) != -1) {
 		switch(c) {
 			case 'q':
 				// log level
@@ -545,6 +547,11 @@ int main(int argc, char** argv) {
 				// version
 				fwrite(XSTR(VER) "\n", sizeof(XSTR(VER)), 1, stderr);
 				exit(EXIT_FAILURE);
+
+			case 'g':
+				// group kill
+				group_kill = 1;
+				break;
 
 			case 's': {
 				// terminating signal
