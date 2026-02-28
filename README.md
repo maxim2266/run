@@ -20,7 +20,7 @@ and reduce my cloud bill by two-thirds.
 ```
 ▶ ./run -h
 Usage:
-  run [-qst] cmd [cmd...]
+  run [-qstg] cmd [cmd...]
   run [-hv]
 
 Start all commands, then wait for them to complete.
@@ -30,6 +30,7 @@ Options:
   -s SIG   Send signal SIG to all remaining processes when one terminates;
            SIG can be any of: INT, TERM, KILL, QUIT, HUP, USR1, USR2.
   -t N     Wait N seconds before sending KILL signal to all remaining processes.
+  -g       Forward signals to the process group of each launched command.
   -h       Show this help and exit.
   -v       Show version and exit.
 ```
@@ -44,6 +45,9 @@ to complete, otherwise:
 
 Option `-t` is meaningless without `-s`. In practice, if both `-s` and `-t` are specified,
 they are usually set to reflect Docker defaults: `-s TERM -t 10`.
+
+For better isolation each command is started in its own session and process group, and option
+`-g` instructs `run` to forward signals to each group instead of each single process.
 
 Exit code from `run` is the first non-zero exit code from any process, or 0 if all completed
 successfully.
