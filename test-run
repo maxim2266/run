@@ -90,4 +90,10 @@ test_case 'with daemon' <<-EOF
 	| grep '\(ignoring daemons\)'
 EOF
 
+test_case 'group kill' <<-EOF
+	$RUN --rm $IMAGE -gs HUP -t 1 '/usr/bin/nohup /bin/sleep 2' \
+		'/bin/sh -c "sleep 3 & sleep 2"' '/bin/sh -c "ps -ao pid,ppid,pgid,args"'
+	[ \$? -eq 129 ]
+EOF
+
 log "completed $TOTAL test cases"
