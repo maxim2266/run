@@ -476,13 +476,13 @@ const char usage_string[] =
 "Start all commands, then wait for them to complete.\n"
 "\n"
 "Options:\n"
-"  -q       Reduce logging level (may be given more than once).\n"
-"  -s SIG   Send signal SIG to all remaining processes when one terminates;\n"
-"           SIG can be any of: INT, TERM, KILL, QUIT, HUP, USR1, USR2.\n"
-"  -t N     Wait N seconds before sending KILL signal to all remaining processes.\n"
-"  -g       Forward signals to the process group of each launched command.\n"
-"  -h       Show this help and exit.\n"
-"  -v       Show version and exit.\n";
+"  -q         Reduce logging level (may be given more than once).\n"
+"  -s SIG     Send signal SIG to all remaining processes when one terminates;\n"
+"             SIG can be any of: INT, TERM, KILL, QUIT, HUP, USR1, USR2.\n"
+"  -t N       Wait N seconds before sending KILL signal to all remaining processes.\n"
+"  -g         Forward signals to the process group of each launched command.\n"
+"  -h,--help  Show this help and exit.\n"
+"  -v         Show version and exit.\n";
 
 // usage string display
 NORETURN
@@ -533,7 +533,7 @@ int main(int argc, char** argv) {
 	setvbuf(stderr, NULL, _IOLBF, 0);
 
 	// check arguments
-	if(argc == 1)
+	if(argc == 1 || strcmp(argv[1], "--help") == 0)
 		usage_exit();
 
 	// parse options
@@ -590,6 +590,9 @@ int main(int argc, char** argv) {
 					die("timeout value of %d seconds is unreasonably high", kill_timeout);
 
 				break;
+
+			case ':':
+				die("missing argument for option `-%c`", optopt);
 
 			case '?':
 				die("unrecognised option `-%c`", optopt);
